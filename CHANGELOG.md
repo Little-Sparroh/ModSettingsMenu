@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0 (2025-12-24)
+
+### Features
+* Support for dropdown selections for configuration entries with predefined acceptable values
+
 ## 1.0.0 (2025-08-19)
 
 ### Features

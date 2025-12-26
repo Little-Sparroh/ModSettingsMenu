@@ -5,16 +5,15 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using System;
 using HarmonyLib;
-using Pigeon;
 
 
 [MycoMod(null, ModFlags.IsClientSide)]
 [BepInPlugin(PLUGINGUID, PLUGINNAME, PLUGINVERSION)]
-public class Plugin : BaseUnityPlugin
+public class SparrohPlugin : BaseUnityPlugin
 {
     public const string PLUGINGUID = "sparroh.modsettingsmenu";
     public const string PLUGINNAME = "ModSettingsMenu";
-    public const string PLUGINVERSION = "1.0.0";
+    public const string PLUGINVERSION = "1.1.0";
     
     public new static ManualLogSource Logger;
 
@@ -31,7 +30,7 @@ public class Plugin : BaseUnityPlugin
         ToggleKey = Config.Bind("Keybinds", "ToggleModConfigGUI", "F10", "Key to toggle mod config GUI");
 
         var harmony = new Harmony(PLUGINGUID);
-        harmony.PatchAll(typeof(Plugin));
+        harmony.PatchAll(typeof(SparrohPlugin));
         harmony.PatchAll(typeof(MenuPatches));
 
         Config.Save();
@@ -50,8 +49,9 @@ public class Plugin : BaseUnityPlugin
                     ModConfigGUI.Toggle();
                 }
             }
-            catch
+            catch (Exception e)
             {
+                Logger.LogError($"Error parsing toggle key '{ToggleKey.Value}': {e.Message}");
             }
         }
 
@@ -78,9 +78,16 @@ public class Plugin : BaseUnityPlugin
 
     void OnGUI()
     {
-        if (MenuPatches.IsMenuOpen && GUI.Button(new Rect(Screen.width - 280, 10, 160, 30), "Mod Config"))
+        try
         {
-            ModConfigGUI.Toggle();
+            if (MenuPatches.IsMenuOpen && GUI.Button(new Rect(Screen.width - 280, 10, 160, 30), "Mod Config"))
+            {
+                ModConfigGUI.Toggle();
+            }
+        }
+        catch (Exception e)
+        {
+            Logger.LogError($"Error in OnGUI: {e.Message}");
         }
     }
 }

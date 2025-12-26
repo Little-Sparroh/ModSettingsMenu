@@ -1,82 +1,63 @@
-# Mod Settings Menu
+# ModSettingsMenu
 
-A MycoPunk mod that provides an in-game GUI for editing mod configuration files. Adapted from ToeKneeRED's 'MycoModList'.
+A BepInEx mod for MycoPunk that provides an in-game GUI for editing mod configuration files.
 
 ## Description
 
-Mod Settings Menu allows you to edit mod config files directly from within the game without needing to navigate to the config folder. This mod creates a clean, intuitive graphical user interface that displays all installed mods with configuration options. You can access the GUI by default with F10 (rebindable) or via a "Mod Config" button in the main menu.
+This mod allows players to edit configuration settings for other installed mods directly within the game interface, without needing to manually edit .cfg files. It parses BepInEx configuration files and presents them in an organized GUI.
 
-Supports editing booleans, integers, floats, and strings. Changes are automatically saved to .cfg files and take effect immediately where possible.
+Adapted from ToeKneeRED's MycoModList.
 
-## Getting Started
+## Features
 
-### Dependencies
+* In-game GUI for editing mod configuration files
+* Default F10 keybind to toggle the config menu (rebindable in-game)
+* "Mod Config" button in the main menu when the menu is open
+* Support for editing boolean toggles, integer/float inputs, text strings, and dropdown selections
+* Configuration entries organized by file sections
+* Automatic saving of changes to .cfg files
+* Visual indicators for sandbox mods
+* Multi-mod support displaying all installed mods with configs
+
+## Dependencies
 
 * MycoPunk (base game)
 * [BepInEx](https://github.com/BepInEx/BepInEx) - Version 5.4.2403 or compatible
 * .NET Framework 4.8
 * [HarmonyLib](https://github.com/pardeike/Harmony) (included via NuGet)
 
-### Building/Compiling
+## Installation
 
-1. Clone this repository and customize the following:
-   - Rename namespace and class names appropriately
-   - Modify PluginGUID to be unique (format: "author.modname")
-   - Update PluginName and PluginVersion
-   - Add your specific Harmony patches and functionality
+1. Install BepInEx for MycoPunk
+2. Download the mod from Thunderstore or place the .dll file in `<MycoPunk Directory>/BepInEx/plugins/`
+3. Launch the game - the mod loads automatically through BepInEx
 
-2. Add any additional NuGet packages or references needed for your mod
+## Usage
 
-3. Open the solution file in Visual Studio, Rider, or your preferred C# IDE
+* Press F10 (or your configured key) to open the mod configuration GUI
+* Alternatively, open the main menu and click the "Mod Config" button
+* Select a mod from the list to view and edit its configuration options
+* Changes are saved automatically when modified
 
-4. Build the project in Release mode to generate the .dll file
+## Configuration
 
-Alternatively, use dotnet CLI:
-```bash
-dotnet build --configuration Release
-```
-
-### Installing
-
-**For distribution as a completed mod:**
-
-**Option 1: Via Thunderstore (Recommended)**
-1. Update `thunderstore.toml` with your mod's specific information
-2. Publish using Thunderstore CLI or mod manager
-3. Users download and install via Thunderstore Mod Manager
-
-**Option 2: Manual Distribution**
-1. Package the built .dll, any config files, and README
-2. Users place the .dll in their `<MycoPunk Directory>/BepInEx/plugins/` folder
-
-**Note:** This template is not meant to be installed directly - customize it first for your specific mod functionality.
-
-### Executing program
-
-Once customized and built, the mod will automatically load through BepInEx when the game starts. Check the BepInEx console for loading confirmation messages.
-
-### Mod Development Structure
-
-- **Plugin.cs:** Main plugin class with Awake method and Harmony initialization
-- **thunderstore.toml:** Publishing configuration for Thunderstore
-- **CSPROJECT.csproj:** Build configuration with proper references
-- **Resources:** Icon and documentation placeholders
+The mod itself has one configurable setting:
+* Toggle Key: Key to open the config menu (default: F10) - can be rebound in-game by clicking the input field
 
 ## Help
 
-* **First time modding?** Check BepInEx documentation and MycoPunk modding resources
-* **Harmony patches failing?** Ensure method signatures match the game's IL
-* **Dependency issues?** Update NuGet packages and verify .NET runtime version
-* **Thunderstore publishing?** Update all metadata in thunderstore.toml before publishing
-* **Plugin not loading?** Check BepInEx logs for errors and verify GUID uniqueness
+* **Mod not loading?** Ensure BepInEx is installed and the .dll is in the correct plugins folder
+* **Configs not showing?** The mod only displays mods that have .cfg files in the BepInEx config directory
+* **Keybind not working?** Check for conflicts with other mods or rebind it in the GUI
+* **GUI not appearing?** Verify the game is running and try toggling with the menu button
 
 ## Authors
 
-* Sparroh (MycoPunk mod collection maintainer)
-* ToeKneeRED (original Mod Author for the basis of this mod)
-* funlennysub (original BepInEx template)
-* [@DomPizzie](https://twitter.com/dompizzie) (README template)
+- Sparroh
+- ToeKneeRED (original MycoModList)
+- funlennysub (BepInEx template)
+- [@DomPizzie](https://twitter.com/dompizzie) (README template)
 
 ## License
 
-* This project is licensed under the MIT License - see the LICENSE.md file for details
+This project is licensed under the MIT License - see the LICENSE file for details
