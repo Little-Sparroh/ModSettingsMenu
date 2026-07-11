@@ -1,6 +1,6 @@
 # ModSettingsMenu
 
-A BepInEx mod for MycoPunk that provides an in-game GUI for editing mod configuration files.
+A BepInEx mod for MycoPunk that provides an in-game GUI for editing mod configuration files, plus a quality-of-life **HUD Reposition Mode** for click-and-drag layout of mod HUD elements.
 
 ## Description
 
@@ -18,6 +18,7 @@ Adapted from ToeKneeRED's MycoModList.
 * Automatic saving of changes to .cfg files
 * Visual indicators for sandbox mods
 * Multi-mod support displaying all installed mods with configs
+* **HUD Reposition Mode** (default F9) — click and drag registered HUD elements; positions write back to each mod's AnchorX/AnchorY config
 
 ## Dependencies
 
@@ -39,10 +40,49 @@ Adapted from ToeKneeRED's MycoModList.
 * Select a mod from the list to view and edit its configuration options
 * Changes are saved automatically when modified
 
+### HUD Reposition Mode
+
+* Press **F9** (or your configured key), or click **Reposition HUDs** in the main menu / Mod Config title bar
+* Drag highlighted HUD elements to the desired position
+* Coordinates (0–1 anchors) update live and are saved when you release the mouse
+* Press **Esc** or the toggle key again to exit
+
+Compatible HUD mods register themselves via the API. Unregistered mods that expose `*AnchorX` / `*AnchorY` config pairs may still be auto-detected when their HUD objects exist under the reticle.
+
 ## Configuration
 
-The mod itself has one configurable setting:
-* Toggle Key: Key to open the config menu (default: F10) - can be rebound in-game by clicking the input field
+The mod itself has configurable settings:
+
+* **ToggleModConfigGUI**: Key to open the config menu (default: F10)
+* **ToggleHudReposition**: Key to enter HUD reposition mode (default: F9)
+
+Both can be rebound in-game by clicking the input field in the Mod Config GUI.
+
+## For mod authors — HudRepositionAPI
+
+Register your HUD after creating its `RectTransform`, and unregister on destroy:
+
+```csharp
+// Soft dependency (recommended) — copy HudRepositionClient.cs.example into your project
+HudRepositionClient.Register(
+    id: "your.mod.guid",
+    displayName: "My HUD",
+    rect: containerRect,
+    anchorX: myAnchorX,   // ConfigEntry<float> 0-1
+    anchorY: myAnchorY);
+
+// On destroy / when HUD is destroyed:
+HudRepositionClient.Unregister("your.mod.guid");
+```
+
+Or call `HudRepositionAPI` directly if you reference `ModSettingsMenu.dll`.
+
+Convention:
+
+* Section: `[HUD Positioning]`
+* Keys: `{Name}AnchorX` / `{Name}AnchorY` as floats in **0–1** (anchorMin = anchorMax)
+* Parent under the player reticle (or any screen-space canvas)
+* Listen to `SettingChanged` on the config entries to apply anchors live
 
 ## Help
 
@@ -50,6 +90,7 @@ The mod itself has one configurable setting:
 * **Configs not showing?** The mod only displays mods that have .cfg files in the BepInEx config directory
 * **Keybind not working?** Check for conflicts with other mods or rebind it in the GUI
 * **GUI not appearing?** Verify the game is running and try toggling with the menu button
+* **HUD not draggable?** Ensure the HUD is visible (in-mission), registered via the API, or has matching AnchorX/Y config keys
 
 ## Authors
 

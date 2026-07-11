@@ -18,14 +18,6 @@
         <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
         <PackageReference Include="BepInEx.Core" Version="5.*" />
         <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
-        <PackageReference Include="GitVersion.MsBuild" Version="6.4.0">
-            <PrivateAssets>all</PrivateAssets>
-            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-        </PackageReference>
-        <PackageReference Include="MinVer" Version="6.1.0-beta.1">
-          <PrivateAssets>all</PrivateAssets>
-          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-        </PackageReference>
         <PackageReference Include="UnityEngine.Modules" Version="2022.3.53" IncludeAssets="compile" />
         <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3">
             <PrivateAssets>all</PrivateAssets>
@@ -72,9 +64,10 @@
       <Reference Include="UnityEngine.UIModule">
         <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.UIModule.dll</HintPath>
       </Reference>
+      <Reference Include="SparrohUILib">
+        <HintPath>..\..\..\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\plugins\Sparroh-SparrohUILib\SparrohUILib.dll</HintPath>
+        <Private>false</Private>
+      </Reference>
     </ItemGroup>
-
-    <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-        <Exec Command="copy &quot;$(TargetPath)&quot; &quot;%USERPROFILE%\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\plugins\$(TargetFileName)&quot;" />
-    </Target>
 </Project>
+

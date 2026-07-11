@@ -9,37 +9,44 @@ using HarmonyLib;
 
 [MycoMod(null, ModFlags.IsClientSide)]
 [BepInPlugin(PLUGINGUID, PLUGINNAME, PLUGINVERSION)]
+[BepInDependency("sparroh.uilibrary")]
 public class SparrohPlugin : BaseUnityPlugin
+
 {
     public const string PLUGINGUID = "sparroh.modsettingsmenu";
     public const string PLUGINNAME = "ModSettingsMenu";
-    public const string PLUGINVERSION = "1.1.0";
+    public const string PLUGINVERSION = "1.2.0";
     
     public new static ManualLogSource Logger;
 
-    private ConfigEntry<int> _intEntry;
-    private ConfigEntry<bool> _boolEntry;
-    private ConfigEntry<string> _stringEntry;
     public static ConfigEntry<string> ToggleKey { get; private set; }
+    public static ConfigEntry<string> RepositionKey { get; private set; }
     public static bool IsRebinding { get; set; } = false;
+    public static bool IsRebindingReposition { get; set; } = false;
 
     private void Awake()
     {
         Logger = base.Logger;
 
         ToggleKey = Config.Bind("Keybinds", "ToggleModConfigGUI", "F10", "Key to toggle mod config GUI");
+        RepositionKey = Config.Bind("Keybinds", "ToggleHudReposition", "F9",
+            "Key to toggle HUD reposition mode (click-and-drag HUD elements)");
 
         var harmony = new Harmony(PLUGINGUID);
         harmony.PatchAll(typeof(SparrohPlugin));
         harmony.PatchAll(typeof(MenuPatches));
+        InputBlocker.EnsurePatched(harmony);
+
+        HudRepositionMode.EnsureExists();
 
         Config.Save();
-        Logger.LogInfo($"{PLUGINGUID} loaded!");
+        Logger.LogInfo($"{PLUGINGUID} v{PLUGINVERSION} loaded!");
     }
+
 
     private void Update()
     {
-        if (!IsRebinding)
+        if (!IsRebinding && !IsRebindingReposition)
         {
             try
             {
@@ -53,22 +60,50 @@ public class SparrohPlugin : BaseUnityPlugin
             {
                 Logger.LogError($"Error parsing toggle key '{ToggleKey.Value}': {e.Message}");
             }
+
+            try
+            {
+                var repoKey = (Key)Enum.Parse(typeof(Key), RepositionKey.Value, true);
+                if (Keyboard.current != null && repoKey != Key.None && Keyboard.current[repoKey].wasPressedThisFrame)
+                {
+                    HudRepositionMode.Toggle();
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"Error parsing reposition key '{RepositionKey.Value}': {e.Message}");
+            }
         }
 
-        if (IsRebinding && Keyboard.current != null)
+        if ((IsRebinding || IsRebindingReposition) && Keyboard.current != null)
         {
             foreach (var k in Keyboard.current.allKeys)
             {
                 if (k.wasPressedThisFrame)
                 {
-                    ToggleKey.Value = k.name;
-                    Config.Save();
-                    IsRebinding = false;
-                    if (ModConfigGUI.KeyBindInput != null)
+                    if (IsRebinding)
                     {
-                        ModConfigGUI.KeyBindInput.text = ToggleKey.Value;
-                        ModConfigGUI.KeyBindInput.interactable = true;
+                        ToggleKey.Value = k.name;
+                        Config.Save();
+                        IsRebinding = false;
+                        if (ModConfigGUI.KeyBindInput != null)
+                        {
+                            ModConfigGUI.KeyBindInput.text = ToggleKey.Value;
+                            ModConfigGUI.KeyBindInput.interactable = true;
+                        }
                     }
+                    else if (IsRebindingReposition)
+                    {
+                        RepositionKey.Value = k.name;
+                        Config.Save();
+                        IsRebindingReposition = false;
+                        if (ModConfigGUI.RepositionKeyBindInput != null)
+                        {
+                            ModConfigGUI.RepositionKeyBindInput.text = RepositionKey.Value;
+                            ModConfigGUI.RepositionKeyBindInput.interactable = true;
+                        }
+                    }
+
                     UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
                     break;
                 }
@@ -76,21 +111,9 @@ public class SparrohPlugin : BaseUnityPlugin
         }
     }
 
-    void OnGUI()
-    {
-        try
-        {
-            if (MenuPatches.IsMenuOpen && GUI.Button(new Rect(Screen.width - 280, 10, 160, 30), "Mod Config"))
-            {
-                ModConfigGUI.Toggle();
-            }
-        }
-        catch (Exception e)
-        {
-            Logger.LogError($"Error in OnGUI: {e.Message}");
-        }
-    }
+
 }
+
 
 public static class MenuPatches
 {

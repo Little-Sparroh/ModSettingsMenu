@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0 (2026-07-10)
+
+### Features
+* **HUD Reposition Mode** — click-and-drag HUD elements instead of typing X/Y anchors
+* Default **F9** keybind to toggle reposition mode (rebindable in-game)
+* "Reposition HUDs" button in the main menu and Mod Config title bar
+* Public `HudRepositionAPI` for other mods to register draggable HUD elements
+* Optional auto-detect of `*AnchorX` / `*AnchorY` config pairs under the reticle
+* Live coordinate labels while dragging; positions saved to BepInEx configs on release
+
+### Technical
+* Soft-dependency friendly registration API (`HudRepositionAPI.Register` / `Unregister`)
+* Example soft-dependency client helper: `HudRepositionClient.cs.example`
+
 ## 1.1.0 (2025-12-24)
 
 ### Features

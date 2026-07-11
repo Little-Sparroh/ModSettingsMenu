@@ -15,7 +15,12 @@ public class ModConfigGUI : MonoBehaviour
     private static GameObject _content;
     private static VerticalLayoutGroup _layoutGroup;
     private static bool _visible = false;
+    private static bool _cursorHeld = false;
     public static InputField KeyBindInput;
+    public static InputField RepositionKeyBindInput;
+    public static bool IsVisible => _visible;
+
+
 
     private static Dictionary<string, Dictionary<string, string[]>> _cachedOptions =
         new Dictionary<string, Dictionary<string, string[]>>();
@@ -37,9 +42,51 @@ public class ModConfigGUI : MonoBehaviour
 
         _visible = !_visible;
         _modWindow.SetActive(_visible);
-        if (_visible) RefreshMods();
-        UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+        if (_visible)
+        {
+            HoldCursor();
+            RefreshMods();
+        }
+        else
+        {
+            ReleaseCursor();
+        }
+
+        if (UnityEngine.EventSystems.EventSystem.current != null)
+            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
     }
+
+    /// <summary>Close the config window without toggling (e.g. when entering reposition mode).</summary>
+    public static void Hide()
+    {
+        if (!_visible)
+            return;
+
+        _visible = false;
+        if (_modWindow != null)
+            _modWindow.SetActive(false);
+        ReleaseCursor();
+
+        if (UnityEngine.EventSystems.EventSystem.current != null)
+            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+    }
+
+    private static void HoldCursor()
+    {
+        if (_cursorHeld)
+            return;
+        FreeCursor.Acquire();
+        _cursorHeld = true;
+    }
+
+    private static void ReleaseCursor()
+    {
+        if (!_cursorHeld)
+            return;
+        FreeCursor.Release();
+        _cursorHeld = false;
+    }
+
 
     private static void CreateGUI()
     {
@@ -91,6 +138,39 @@ public class ModConfigGUI : MonoBehaviour
         titleText.color = new Color(1f, 1f, 1f, 1f);
         titleText.alignment = TextAnchor.MiddleCenter;
 
+        // Reposition HUDs button in the title bar
+        var repoBtnObj = new GameObject("RepositionButton", typeof(Image), typeof(Button));
+        repoBtnObj.transform.SetParent(titleObj.transform, false);
+        var repoBtnRect = repoBtnObj.GetComponent<RectTransform>();
+        repoBtnRect.anchorMin = new Vector2(1, 0.5f);
+        repoBtnRect.anchorMax = new Vector2(1, 0.5f);
+        repoBtnRect.pivot = new Vector2(1, 0.5f);
+        repoBtnRect.sizeDelta = new Vector2(150, 28);
+        repoBtnRect.anchoredPosition = new Vector2(-8, 0);
+        var repoBtnImg = repoBtnObj.GetComponent<Image>();
+        repoBtnImg.color = new Color(0.25f, 0.55f, 0.85f, 1f);
+        var repoBtn = repoBtnObj.GetComponent<Button>();
+        repoBtn.targetGraphic = repoBtnImg;
+        var repoBtnTextObj = new GameObject("Text", typeof(Text));
+        repoBtnTextObj.transform.SetParent(repoBtnObj.transform, false);
+        var repoBtnTextRect = repoBtnTextObj.GetComponent<RectTransform>();
+        repoBtnTextRect.anchorMin = Vector2.zero;
+        repoBtnTextRect.anchorMax = Vector2.one;
+        repoBtnTextRect.offsetMin = Vector2.zero;
+        repoBtnTextRect.offsetMax = Vector2.zero;
+        var repoBtnText = repoBtnTextObj.GetComponent<Text>();
+        repoBtnText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        repoBtnText.fontSize = 13;
+        repoBtnText.color = Color.white;
+        repoBtnText.alignment = TextAnchor.MiddleCenter;
+        repoBtnText.text = "Reposition HUDs";
+        repoBtn.onClick.AddListener(() =>
+        {
+            Hide();
+            HudRepositionMode.Enter();
+        });
+
+
         var scrollObj = new GameObject("ScrollView", typeof(ScrollRect), typeof(Image), typeof(UnityEngine.UI.Mask));
         scrollObj.transform.SetParent(panel.transform, false);
         var mask = scrollObj.GetComponent<UnityEngine.UI.Mask>();
@@ -100,6 +180,7 @@ public class ModConfigGUI : MonoBehaviour
         scrollRect.anchorMax = new Vector2(1, 1);
         scrollRect.offsetMin = new Vector2(20, 20);
         scrollRect.offsetMax = new Vector2(-20, -60);
+
 
         var scrollImg = scrollObj.GetComponent<Image>();
         scrollImg.color = new Color(0.1f, 0.1f, 0.15f, 0.8f);
@@ -504,19 +585,32 @@ public class ModConfigGUI : MonoBehaviour
                     {
                         var input = valueObj.AddComponent<InputField>();
                         input.text = value;
-                        if (section.Key.Trim('[', ']') == "Keybinds" && key == "ToggleModConfigGUI")
+                        string sectionName = section.Key.Trim('[', ']');
+                        bool isConfigToggleKey = sectionName == "Keybinds" && key == "ToggleModConfigGUI";
+                        bool isRepositionKey = sectionName == "Keybinds" && key == "ToggleHudReposition";
+
+                        if (isConfigToggleKey || isRepositionKey)
                         {
                             var eventTrigger = input.gameObject.AddComponent<EventTrigger>();
                             var triggerEntry = new EventTrigger.Entry();
                             triggerEntry.eventID = EventTriggerType.PointerClick;
+                            bool bindConfig = isConfigToggleKey;
                             triggerEntry.callback.AddListener((data) =>
                             {
-                                if (!SparrohPlugin.IsRebinding)
+                                if (!SparrohPlugin.IsRebinding && !SparrohPlugin.IsRebindingReposition)
                                 {
                                     input.text = "Press new key...";
                                     input.interactable = false;
-                                    SparrohPlugin.IsRebinding = true;
-                                    KeyBindInput = input;
+                                    if (bindConfig)
+                                    {
+                                        SparrohPlugin.IsRebinding = true;
+                                        KeyBindInput = input;
+                                    }
+                                    else
+                                    {
+                                        SparrohPlugin.IsRebindingReposition = true;
+                                        RepositionKeyBindInput = input;
+                                    }
                                 }
                             });
                             eventTrigger.triggers.Add(triggerEntry);
@@ -524,13 +618,15 @@ public class ModConfigGUI : MonoBehaviour
 
                         input.onValueChanged.AddListener(newVal =>
                         {
-                            if (!SparrohPlugin.IsRebinding ||
-                                (section.Key.Trim('[', ']') != "Keybinds" || key != "ToggleModConfigGUI"))
+                            bool rebindingThis = (isConfigToggleKey && SparrohPlugin.IsRebinding) ||
+                                                 (isRepositionKey && SparrohPlugin.IsRebindingReposition);
+                            if (!rebindingThis)
                             {
                                 configEntry.Value = newVal;
                                 configEntry.ConfigFile.Save();
                             }
                         });
+
                         var inputImg = valueObj.AddComponent<Image>();
                         inputImg.color = new Color(0.8f, 0.8f, 0.9f, 0.9f);
                         var textChild = new GameObject("Text", typeof(Text));
