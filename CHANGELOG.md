@@ -14,6 +14,12 @@
 * Soft-dependency friendly registration API (`HudRepositionAPI.Register` / `Unregister`)
 * Example soft-dependency client helper: `HudRepositionClient.cs.example`
 
+1.1.1 (2026-01-09)
+Changes
+
+    Button Adjustments
+    Lost this update, it never made it to github.
+
 ## 1.1.0 (2025-12-24)
 
 ### Features

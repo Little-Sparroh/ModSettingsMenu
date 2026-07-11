@@ -95,9 +95,6 @@ Convention:
 ## Authors
 
 - Sparroh
-- ToeKneeRED (original MycoModList)
-- funlennysub (BepInEx template)
-- [@DomPizzie](https://twitter.com/dompizzie) (README template)
 
 ## License
 
