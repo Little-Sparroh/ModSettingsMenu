@@ -10,20 +10,78 @@ using BepInEx.Configuration;
 
 public class ModConfigGUI : MonoBehaviour
 {
+    /// <summary>Entry row min height + VerticalLayoutGroup spacing — one wheel notch scrolls one item.</summary>
+    private const float ItemScrollStep = 70f;
+    private const float ClickDragThresholdPx = 8f;
+
     private static GameObject _modWindow;
     private static GameObject _scrollView;
     private static GameObject _content;
+    private static ScrollRect _scrollRect;
     private static VerticalLayoutGroup _layoutGroup;
     private static bool _visible = false;
     private static bool _cursorHeld = false;
+    private static InputField _activeInput;
+    private static readonly List<GameObject> _openDropdowns = new List<GameObject>();
+
     public static InputField KeyBindInput;
     public static InputField RepositionKeyBindInput;
     public static bool IsVisible => _visible;
 
-
-
     private static Dictionary<string, Dictionary<string, string[]>> _cachedOptions =
         new Dictionary<string, Dictionary<string, string[]>>();
+
+    /// <summary>
+    /// Unfocus inputs, close dropdowns, and clear EventSystem selection so scroll/pan
+    /// never commits or continues an edit.
+    /// </summary>
+    internal static void ClearActiveEditing()
+    {
+        if (_activeInput != null)
+        {
+            _activeInput.DeactivateInputField();
+            _activeInput = null;
+        }
+
+        for (int i = _openDropdowns.Count - 1; i >= 0; i--)
+        {
+            var dd = _openDropdowns[i];
+            if (dd != null)
+                dd.SetActive(false);
+        }
+        _openDropdowns.Clear();
+
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(null);
+    }
+
+    private static void RegisterOpenDropdown(GameObject listObj)
+    {
+        if (listObj == null)
+            return;
+        if (!_openDropdowns.Contains(listObj))
+            _openDropdowns.Add(listObj);
+    }
+
+    private static void UnregisterDropdown(GameObject listObj)
+    {
+        _openDropdowns.Remove(listObj);
+    }
+
+    private static void ActivateInput(InputField input)
+    {
+        if (input == null)
+            return;
+
+        if (_activeInput != null && _activeInput != input)
+            _activeInput.DeactivateInputField();
+
+        _activeInput = input;
+        input.interactable = true;
+        input.ActivateInputField();
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(input.gameObject);
+    }
 
     public static void Toggle()
     {
@@ -49,11 +107,12 @@ public class ModConfigGUI : MonoBehaviour
         }
         else
         {
+            ClearActiveEditing();
             ReleaseCursor();
         }
 
-        if (UnityEngine.EventSystems.EventSystem.current != null)
-            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(null);
     }
 
     /// <summary>Close the config window without toggling (e.g. when entering reposition mode).</summary>
@@ -65,10 +124,11 @@ public class ModConfigGUI : MonoBehaviour
         _visible = false;
         if (_modWindow != null)
             _modWindow.SetActive(false);
+        ClearActiveEditing();
         ReleaseCursor();
 
-        if (UnityEngine.EventSystems.EventSystem.current != null)
-            UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(null);
     }
 
     private static void HoldCursor()
@@ -87,17 +147,12 @@ public class ModConfigGUI : MonoBehaviour
         _cursorHeld = false;
     }
 
-
     private static void CreateGUI()
     {
-
         var canvas = new GameObject("ModConfigCanvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         canvas.transform.SetParent(null, false);
         var can = canvas.GetComponent<Canvas>();
-        if (can == null)
-        {
-        }
-        else
+        if (can != null)
         {
             can.renderMode = RenderMode.ScreenSpaceOverlay;
             can.sortingOrder = 100;
@@ -170,51 +225,75 @@ public class ModConfigGUI : MonoBehaviour
             HudRepositionMode.Enter();
         });
 
-
-        var scrollObj = new GameObject("ScrollView", typeof(ScrollRect), typeof(Image), typeof(UnityEngine.UI.Mask));
+        var scrollObj = new GameObject("ScrollView", typeof(ScrollRect), typeof(Image));
         scrollObj.transform.SetParent(panel.transform, false);
-        var mask = scrollObj.GetComponent<UnityEngine.UI.Mask>();
-        mask.showMaskGraphic = false;
         var scrollRect = scrollObj.GetComponent<RectTransform>();
         scrollRect.anchorMin = new Vector2(0, 0);
         scrollRect.anchorMax = new Vector2(1, 1);
         scrollRect.offsetMin = new Vector2(20, 20);
         scrollRect.offsetMax = new Vector2(-20, -60);
 
-
         var scrollImg = scrollObj.GetComponent<Image>();
         scrollImg.color = new Color(0.1f, 0.1f, 0.15f, 0.8f);
 
+        // Proper viewport so ScrollRect masks and measures content correctly
+        var viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+        viewportObj.transform.SetParent(scrollObj.transform, false);
+        var viewportRect = viewportObj.GetComponent<RectTransform>();
+        viewportRect.anchorMin = Vector2.zero;
+        viewportRect.anchorMax = Vector2.one;
+        viewportRect.offsetMin = Vector2.zero;
+        viewportRect.offsetMax = Vector2.zero;
+        var viewportImg = viewportObj.GetComponent<Image>();
+        viewportImg.color = Color.white;
+        var viewportMask = viewportObj.GetComponent<Mask>();
+        viewportMask.showMaskGraphic = false;
+
         var scrollComponent = scrollObj.GetComponent<ScrollRect>();
         var scrollContent = new GameObject("Content", typeof(VerticalLayoutGroup));
-        scrollContent.transform.SetParent(scrollObj.transform, false);
+        scrollContent.transform.SetParent(viewportObj.transform, false);
         var contentRect = scrollContent.GetComponent<RectTransform>();
         contentRect.anchorMin = new Vector2(0, 1);
         contentRect.anchorMax = new Vector2(1, 1);
-        contentRect.pivot = new Vector2(0, 1);
+        contentRect.pivot = new Vector2(0.5f, 1);
         contentRect.sizeDelta = new Vector2(0, 0);
 
         scrollComponent.content = contentRect;
+        scrollComponent.viewport = viewportRect;
         scrollComponent.vertical = true;
         scrollComponent.horizontal = false;
-        scrollComponent.scrollSensitivity = 0.1f;
+        // Disable built-in wheel scaling; ItemStepScrollHandler moves one item per notch.
+        scrollComponent.scrollSensitivity = 0f;
+        scrollComponent.movementType = ScrollRect.MovementType.Clamped;
+        scrollComponent.inertia = true;
 
         var layout = scrollContent.GetComponent<VerticalLayoutGroup>();
         layout.childControlHeight = true;
+        layout.childControlWidth = true;
         layout.childForceExpandHeight = false;
+        layout.childForceExpandWidth = true;
         layout.spacing = 15;
         layout.padding = new RectOffset(20, 20, 15, 20);
 
         var fitter = scrollContent.AddComponent<ContentSizeFitter>();
         fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+
+        // One wheel notch = one config item; clear edits when scrolling/dragging
+        var stepScroll = scrollObj.AddComponent<ItemStepScrollHandler>();
+        stepScroll.Initialize(scrollComponent, ItemScrollStep);
 
         _modWindow = panel;
+        _scrollView = scrollObj;
+        _scrollRect = scrollComponent;
         _content = scrollContent;
         _layoutGroup = layout;
     }
 
     public static void RefreshMods()
     {
+        ClearActiveEditing();
+
         foreach (Transform child in _content.transform)
         {
             Destroy(child.gameObject);
@@ -464,15 +543,15 @@ public class ModConfigGUI : MonoBehaviour
                     {
                         valueObj.transform.localScale = new Vector3(0.7f, 0.7f, 0.7f);
 
-                        var toggle = valueObj.AddComponent<Toggle>();
-                        toggle.isOn = rawEntryValue.ToLower() == "true";
+                        // Display-only status; click-vs-drag gate prevents pan from flipping values.
                         var statusText = new GameObject("Status", typeof(Text));
                         statusText.transform.SetParent(valueObj.transform, false);
                         var statusComp = statusText.GetComponent<Text>();
-                        statusComp.text = toggle.isOn ? "ON" : "OFF";
+                        bool isOn = rawEntryValue.ToLower() == "true";
+                        statusComp.text = isOn ? "ON" : "OFF";
                         statusComp.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
                         statusComp.fontSize = 16;
-                        statusComp.color = toggle.isOn ? Color.green : Color.red;
+                        statusComp.color = isOn ? Color.green : Color.red;
                         statusComp.alignment = TextAnchor.MiddleCenter;
                         var statusRect = statusText.GetComponent<RectTransform>();
                         statusRect.anchorMin = Vector2.zero;
@@ -480,16 +559,22 @@ public class ModConfigGUI : MonoBehaviour
                         statusRect.offsetMin = Vector2.zero;
                         statusRect.offsetMax = Vector2.zero;
 
-                        toggle.onValueChanged.AddListener(val =>
-                        {
-                            configEntry.Value = val ? "True" : "False";
-                            configEntry.ConfigFile.Save();
-                            statusComp.text = val ? "ON" : "OFF";
-                            statusComp.color = val ? Color.green : Color.red;
-                        });
                         var toggleImg = valueObj.AddComponent<Image>();
                         toggleImg.color = new Color(0.7f, 0.7f, 0.8f, 0.9f);
-                        toggle.targetGraphic = toggleImg;
+                        // Raycast target so clicks hit this control
+                        toggleImg.raycastTarget = true;
+
+                        var clickToggle = valueObj.AddComponent<ClickVsDragToggle>();
+                        clickToggle.Initialize(
+                            isOn,
+                            ClickDragThresholdPx,
+                            val =>
+                            {
+                                configEntry.Value = val ? "True" : "False";
+                                configEntry.ConfigFile.Save();
+                                statusComp.text = val ? "ON" : "OFF";
+                                statusComp.color = val ? Color.green : Color.red;
+                            });
                     }
                     else if (options != null)
                     {
@@ -560,12 +645,17 @@ public class ModConfigGUI : MonoBehaviour
                                 configEntry.ConfigFile.Save();
                                 mainText.text = options[index];
                                 listObj.SetActive(false);
+                                UnregisterDropdown(listObj);
                             });
                         }
 
                         mainButton.onClick.AddListener(() =>
                         {
-                            if (!listObj.activeSelf)
+                            // Explicit click opens/closes; close others first
+                            bool opening = !listObj.activeSelf;
+                            ClearActiveEditing();
+
+                            if (opening)
                             {
                                 Vector3[] corners = new Vector3[4];
                                 valueObj.GetComponent<RectTransform>().GetWorldCorners(corners);
@@ -576,59 +666,25 @@ public class ModConfigGUI : MonoBehaviour
                                     out localPoint);
                                 listRect.anchoredPosition = localPoint + new Vector2(0,
                                     -valueObj.GetComponent<RectTransform>().rect.height / 2 - 5);
+                                listObj.SetActive(true);
+                                RegisterOpenDropdown(listObj);
                             }
-
-                            listObj.SetActive(!listObj.activeSelf);
                         });
                     }
                     else
                     {
                         var input = valueObj.AddComponent<InputField>();
                         input.text = value;
+                        // Start non-interactive: user must click to arm the field for editing.
+                        input.interactable = false;
+
                         string sectionName = section.Key.Trim('[', ']');
                         bool isConfigToggleKey = sectionName == "Keybinds" && key == "ToggleModConfigGUI";
                         bool isRepositionKey = sectionName == "Keybinds" && key == "ToggleHudReposition";
 
-                        if (isConfigToggleKey || isRepositionKey)
-                        {
-                            var eventTrigger = input.gameObject.AddComponent<EventTrigger>();
-                            var triggerEntry = new EventTrigger.Entry();
-                            triggerEntry.eventID = EventTriggerType.PointerClick;
-                            bool bindConfig = isConfigToggleKey;
-                            triggerEntry.callback.AddListener((data) =>
-                            {
-                                if (!SparrohPlugin.IsRebinding && !SparrohPlugin.IsRebindingReposition)
-                                {
-                                    input.text = "Press new key...";
-                                    input.interactable = false;
-                                    if (bindConfig)
-                                    {
-                                        SparrohPlugin.IsRebinding = true;
-                                        KeyBindInput = input;
-                                    }
-                                    else
-                                    {
-                                        SparrohPlugin.IsRebindingReposition = true;
-                                        RepositionKeyBindInput = input;
-                                    }
-                                }
-                            });
-                            eventTrigger.triggers.Add(triggerEntry);
-                        }
-
-                        input.onValueChanged.AddListener(newVal =>
-                        {
-                            bool rebindingThis = (isConfigToggleKey && SparrohPlugin.IsRebinding) ||
-                                                 (isRepositionKey && SparrohPlugin.IsRebindingReposition);
-                            if (!rebindingThis)
-                            {
-                                configEntry.Value = newVal;
-                                configEntry.ConfigFile.Save();
-                            }
-                        });
-
                         var inputImg = valueObj.AddComponent<Image>();
                         inputImg.color = new Color(0.8f, 0.8f, 0.9f, 0.9f);
+                        inputImg.raycastTarget = true;
                         var textChild = new GameObject("Text", typeof(Text));
                         textChild.transform.SetParent(valueObj.transform, false);
                         var textChildRect = textChild.GetComponent<RectTransform>();
@@ -643,6 +699,51 @@ public class ModConfigGUI : MonoBehaviour
                         input.textComponent.color = Color.black;
                         input.textComponent.alignment = TextAnchor.MiddleCenter;
                         input.targetGraphic = inputImg;
+
+                        if (isConfigToggleKey || isRepositionKey)
+                        {
+                            var eventTrigger = input.gameObject.AddComponent<EventTrigger>();
+                            var triggerEntry = new EventTrigger.Entry();
+                            triggerEntry.eventID = EventTriggerType.PointerClick;
+                            bool bindConfig = isConfigToggleKey;
+                            triggerEntry.callback.AddListener((data) =>
+                            {
+                                if (!SparrohPlugin.IsRebinding && !SparrohPlugin.IsRebindingReposition)
+                                {
+                                    ClearActiveEditing();
+                                    input.interactable = false;
+                                    input.text = "Press new key...";
+                                    if (bindConfig)
+                                    {
+                                        SparrohPlugin.IsRebinding = true;
+                                        KeyBindInput = input;
+                                    }
+                                    else
+                                    {
+                                        SparrohPlugin.IsRebindingReposition = true;
+                                        RepositionKeyBindInput = input;
+                                    }
+                                }
+                            });
+                            eventTrigger.triggers.Add(triggerEntry);
+                        }
+                        else
+                        {
+                            // Select-to-edit: first click arms the field; save on end edit.
+                            var armClick = valueObj.AddComponent<SelectToEditInput>();
+                            armClick.Initialize(input, ClickDragThresholdPx, () => ActivateInput(input));
+
+                            input.onEndEdit.AddListener(newVal =>
+                            {
+                                configEntry.Value = newVal;
+                                configEntry.ConfigFile.Save();
+                                input.interactable = false;
+                                if (_activeInput == input)
+                                    _activeInput = null;
+                                if (EventSystem.current != null)
+                                    EventSystem.current.SetSelectedGameObject(null);
+                            });
+                        }
                     }
                 }
             }
@@ -653,3 +754,151 @@ public class ModConfigGUI : MonoBehaviour
         }
     }
 }
+
+/// <summary>
+/// ScrollRect wheel handler: each discrete wheel notch moves content by one item step.
+/// Also clears active editing when the user scrolls or begins drag-panning.
+/// </summary>
+public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHandler, IEndDragHandler
+{
+    private ScrollRect _scrollRect;
+    private float _stepPixels = 70f;
+
+    public void Initialize(ScrollRect scrollRect, float stepPixels)
+    {
+        _scrollRect = scrollRect;
+        _stepPixels = Mathf.Max(1f, stepPixels);
+    }
+
+    public void OnScroll(PointerEventData eventData)
+    {
+        if (_scrollRect == null || !_scrollRect.vertical)
+            return;
+
+        ModConfigGUI.ClearActiveEditing();
+
+        float scrollDelta = eventData.scrollDelta.y;
+        if (Mathf.Approximately(scrollDelta, 0f))
+            return;
+
+        // One notch (typically ±1 or ±120 depending on platform) → exactly one item step.
+        float direction = scrollDelta > 0f ? 1f : -1f;
+
+        // Positive wheel (up) should reveal content above → increase verticalNormalizedPosition.
+        RectTransform content = _scrollRect.content;
+        RectTransform viewport = _scrollRect.viewport != null
+            ? _scrollRect.viewport
+            : (RectTransform)_scrollRect.transform;
+
+        float contentHeight = content.rect.height;
+        float viewportHeight = viewport.rect.height;
+        float scrollable = Mathf.Max(0f, contentHeight - viewportHeight);
+        if (scrollable <= 0f)
+            return;
+
+        float stepNormalized = _stepPixels / scrollable;
+        float next = Mathf.Clamp01(_scrollRect.verticalNormalizedPosition + direction * stepNormalized);
+        _scrollRect.velocity = Vector2.zero;
+        _scrollRect.verticalNormalizedPosition = next;
+
+        // Consume so ScrollRect's own OnScroll (sensitivity 0) is irrelevant.
+        eventData.Use();
+    }
+
+    public void OnBeginDrag(PointerEventData eventData)
+    {
+        ModConfigGUI.ClearActiveEditing();
+    }
+
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        // no-op; kept for interface completeness / future inertia tweaks
+    }
+}
+
+/// <summary>
+/// Bool control: only flips on a clean click (pointer moved less than threshold).
+/// Does not implement IDragHandler so ScrollRect drag-pan still works from this control.
+/// </summary>
+public class ClickVsDragToggle : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
+{
+    private bool _value;
+    private float _threshold;
+    private Action<bool> _onChanged;
+    private Vector2 _pressPos;
+    private bool _pressed;
+
+    public void Initialize(bool initialValue, float dragThresholdPx, Action<bool> onChanged)
+    {
+        _value = initialValue;
+        _threshold = dragThresholdPx;
+        _onChanged = onChanged;
+    }
+
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        if (eventData.button != PointerEventData.InputButton.Left)
+            return;
+        _pressed = true;
+        _pressPos = eventData.position;
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        if (!_pressed || eventData.button != PointerEventData.InputButton.Left)
+            return;
+        _pressed = false;
+
+        // Treat as drag/pan if the pointer moved past the threshold
+        if ((eventData.position - _pressPos).sqrMagnitude > _threshold * _threshold)
+            return;
+
+        _value = !_value;
+        _onChanged?.Invoke(_value);
+    }
+}
+
+/// <summary>
+/// Text/number field: first clean click arms the InputField for editing.
+/// Does not implement IDragHandler so ScrollRect drag-pan still works from this control.
+/// </summary>
+public class SelectToEditInput : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
+{
+    private InputField _input;
+    private float _threshold;
+    private Action _onSelect;
+    private Vector2 _pressPos;
+    private bool _pressed;
+
+    public void Initialize(InputField input, float dragThresholdPx, Action onSelect)
+    {
+        _input = input;
+        _threshold = dragThresholdPx;
+        _onSelect = onSelect;
+    }
+
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        if (eventData.button != PointerEventData.InputButton.Left)
+            return;
+        _pressed = true;
+        _pressPos = eventData.position;
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        if (!_pressed || eventData.button != PointerEventData.InputButton.Left)
+            return;
+        _pressed = false;
+
+        if ((eventData.position - _pressPos).sqrMagnitude > _threshold * _threshold)
+            return;
+
+        // Already editing this field — leave it alone
+        if (_input != null && _input.interactable && _input.isFocused)
+            return;
+
+        _onSelect?.Invoke();
+    }
+}
+

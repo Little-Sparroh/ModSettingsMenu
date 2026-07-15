@@ -1,6 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+* **Scroll wheel** — each wheel notch now advances the config list by one item (was nearly unusable at `0.1` sensitivity)
+* **Accidental edits** — toggles only flip on a clean click (not drag-pan); text fields require an explicit click to start editing and save on end-edit; scrolling or drag-panning clears focus and closes dropdowns
+
 ## 1.2.0 (2026-07-10)
+
 
 ### Features
 * **HUD Reposition Mode** — click-and-drag HUD elements instead of typing X/Y anchors
