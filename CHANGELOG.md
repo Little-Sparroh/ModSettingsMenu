@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.0
 
 ### Features
 * **Sticky mod titles** — while scrolling the config list, the current mod's title pins to the top of the viewport until the next mod pushes it off (so you always know which mod you're editing)

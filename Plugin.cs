@@ -16,7 +16,7 @@ public class SparrohPlugin : BaseUnityPlugin
 {
     public const string PLUGINGUID = "sparroh.modsettingsmenu";
     public const string PLUGINNAME = "ModSettingsMenu";
-    public const string PLUGINVERSION = "1.2.0";
+    public const string PLUGINVERSION = "2.0.0";
     
     public new static ManualLogSource Logger;
 
