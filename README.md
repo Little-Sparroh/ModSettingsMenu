@@ -18,12 +18,18 @@ Adapted from ToeKneeRED's MycoModList.
 * Automatic saving of changes to .cfg files
 * Visual indicators for sandbox mods
 * Multi-mod support displaying all installed mods with configs
+* **Mod list toolbar** — search by name/GUID, sort (A–Z, load order, sandbox first, …), hide mods without config, and All/Sandbox/Client-side filter chips
+* **Collapse / expand** — click mod titles (or the sticky pinned header) to fold settings; Expand/Collapse all; optional group-by-author (GUID prefix)
+
+
 * **HUD Reposition Mode** (default F9) — click and drag registered HUD elements; positions write back to each mod's AnchorX/AnchorY config
+
 
 ## Dependencies
 
 * MycoPunk (base game)
 * [BepInEx](https://github.com/BepInEx/BepInEx) - Version 5.4.2403 or compatible
+* [SparrohUILib](https://thunderstore.io/c/mycopunk/p/Sparroh/SparrohUILib/) — shared themed UI (required)
 * .NET Framework 4.8
 * [HarmonyLib](https://github.com/pardeike/Harmony) (included via NuGet)
 
@@ -55,8 +61,14 @@ The mod itself has configurable settings:
 
 * **ToggleModConfigGUI**: Key to open the config menu (default: F10)
 * **ToggleHudReposition**: Key to enter HUD reposition mode (default: F9)
+* **ModSortMode**: List order — `Alphabetical` (default), `AlphabeticalDesc`, `LoadOrder`, `SandboxFirst`, `HasConfigFirst`
+* **HideModsWithoutConfig**: Hide mods with no matching `.cfg` (default: true)
+* **ModListFilter**: `All` (default), `Sandbox`, or `ClientSide`
+* **GroupModsByAuthor**: Group list by GUID author prefix (default: false)
+* **CollapsedMods**: Comma-separated mod keys that are collapsed (empty = all expanded)
 
-Both can be rebound in-game by clicking the input field in the Mod Config GUI.
+Keybinds can be rebound in-game by clicking the input field in the Mod Config GUI. Sort, hide-empty, filter chips, grouping, and collapse state also update from the toolbar.
+
 
 ## For mod authors — HudRepositionAPI
 

@@ -2,9 +2,33 @@
 
 ## Unreleased
 
+### Features
+* **Sticky mod titles** — while scrolling the config list, the current mod's title pins to the top of the viewport until the next mod pushes it off (so you always know which mod you're editing)
+* **Sticky-aware row snap** — wheel scroll snaps one full content row at a time (any height) and aligns under the pinned title so rows don't rest half-clipped
+* **Mod list toolbar** — fixed bar above the scroll list with search, sort, hide-empty, and filter chips
+* **Search mods** — filter the list by mod name or GUID as you type (clears each time the menu opens)
+* **Sort modes** — A–Z, Z–A, load order, sandbox first, has-config first (persisted in config)
+* **Hide empty** — optionally hide mods with no matching `.cfg` (default on; persisted)
+* **Filter chips** — All / Sandbox / Client-side (single-select; persisted)
+* **Collapse / expand mods** — click a mod title (+/−) to fold its settings; default all expanded; state persisted
+* **Sticky title collapse** — click the pinned sticky header to collapse/expand the active mod (same as the in-list title)
+* **Expand / Collapse all** — toolbar button toggles every visible mod section
+* **Group by author** — optional grouping by GUID prefix (e.g. `sparroh.*`); off by default
+
+
+
+### Changes
+
+* **SparrohUILib GUI** — config menu rebuilt with `UIWindow`, themed widgets, TMP text, and the Mycopunk teal/slate palette (was still using hand-rolled legacy Unity UI)
+* **Readability** — darker surfaces under all text (`PanelBg` / `EntryBg` / `InputBg`); larger bold titles, section headers, and labels
+* **Layout polish** — narrower window (~520px), title shortened to "Mod Configs", wider value/editor controls per row; opening Mod Config (F10) exits HUD Reposition mode
+
+
 ### Fixes
 * **Scroll wheel** — each wheel notch now advances the config list by one item (was nearly unusable at `0.1` sensitivity)
 * **Accidental edits** — toggles only flip on a clean click (not drag-pan); text fields require an explicit click to start editing and save on end-edit; scrolling or drag-panning clears focus and closes dropdowns
+* **Cursor lost with menu open** — closing ModSettingsMenu while the in-game Menu is open no longer locks/hides the cursor; FreeCursor now stacks with `PlayerInput.UnlockCursor` / `LockCursor`
+
 
 ## 1.2.0 (2026-07-10)
 

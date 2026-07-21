@@ -2,15 +2,15 @@ using UnityEngine;
 
 /// <summary>
 /// Forces an unlocked, visible mouse cursor while any ModSettingsMenu UI is open.
-/// Re-applies every frame (including LateUpdate) so game FPS lock cannot steal it back.
+/// Stacks with the game's PlayerInput cursor ref-count so closing MSM while the
+/// in-game Menu is still open does not steal the cursor.
+/// Re-applies every frame (including LateUpdate) so other systems cannot stomp it.
 /// Reference-counted so config GUI + reposition mode can stack safely.
 /// </summary>
 public static class FreeCursor
 {
     private static int _holders;
-    private static bool _stored;
-    private static CursorLockMode _previousLockState;
-    private static bool _previousCursorVisible;
+    private static bool _usedPlayerInput;
     private static FreeCursorDriver _driver;
 
     public static bool IsHeld => _holders > 0;
@@ -21,7 +21,7 @@ public static class FreeCursor
         EnsureDriver();
 
         if (_holders == 0)
-            Store();
+            UnlockViaGame();
 
         _holders++;
         Apply();
@@ -35,7 +35,7 @@ public static class FreeCursor
 
         _holders--;
         if (_holders == 0)
-            Restore();
+            LockViaGame();
     }
 
     /// <summary>Force free cursor now (safe to call every frame while held).</summary>
@@ -44,28 +44,75 @@ public static class FreeCursor
         if (_holders <= 0)
             return;
 
-        Cursor.lockState = CursorLockMode.None;
+        Cursor.lockState = PlayerInput.CursorMenuMode;
         Cursor.visible = true;
     }
 
-    private static void Store()
+    private static void UnlockViaGame()
     {
-        if (_stored)
-            return;
-
-        _previousLockState = Cursor.lockState;
-        _previousCursorVisible = Cursor.visible;
-        _stored = true;
+        try
+        {
+            PlayerInput.UnlockCursor();
+            _usedPlayerInput = true;
+        }
+        catch
+        {
+            // PlayerInput may not be ready very early; fall back to direct cursor control.
+            _usedPlayerInput = false;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
     }
 
-    private static void Restore()
+    private static void LockViaGame()
     {
-        if (!_stored)
-            return;
+        if (_usedPlayerInput)
+        {
+            try
+            {
+                // Stacks with Menu: if enableCursor stays > 0, cursor remains free.
+                PlayerInput.LockCursor();
+            }
+            catch
+            {
+                // ignore
+            }
+            finally
+            {
+                _usedPlayerInput = false;
+            }
+        }
 
-        Cursor.lockState = _previousLockState;
-        Cursor.visible = _previousCursorVisible;
-        _stored = false;
+        // Safety: if the game menu (or anything else) still wants a free cursor, keep it free.
+        // PlayerInput.IsMenuEnabled covers the in-game Menu path.
+        try
+        {
+            if (PlayerInput.IsMenuEnabled)
+            {
+                Cursor.lockState = PlayerInput.CursorMenuMode;
+                Cursor.visible = true;
+                return;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        // Also respect Menu.Instance if PlayerInput flag is somehow out of sync.
+        try
+        {
+            if (Menu.Instance != null && Menu.Instance.IsOpen)
+            {
+                Cursor.lockState = PlayerInput.CursorMenuMode;
+                Cursor.visible = true;
+                return;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     private static void EnsureDriver()

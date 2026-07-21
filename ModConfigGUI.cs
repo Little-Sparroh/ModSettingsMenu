@@ -2,34 +2,88 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEngine;
-using UnityEngine.UI;
-using UnityEngine.EventSystems;
 using BepInEx;
 using BepInEx.Configuration;
+using Sparroh.UI;
+using TMPro;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 public class ModConfigGUI : MonoBehaviour
 {
-    /// <summary>Entry row min height + VerticalLayoutGroup spacing — one wheel notch scrolls one item.</summary>
-    private const float ItemScrollStep = 70f;
     private const float ClickDragThresholdPx = 8f;
 
-    private static GameObject _modWindow;
-    private static GameObject _scrollView;
-    private static GameObject _content;
-    private static ScrollRect _scrollRect;
-    private static VerticalLayoutGroup _layoutGroup;
-    private static bool _visible = false;
-    private static bool _cursorHeld = false;
-    private static InputField _activeInput;
-    private static readonly List<GameObject> _openDropdowns = new List<GameObject>();
+    // Slightly larger than theme defaults for config readability.
+    private const float FontTitleRef = 26f;
+    private const float FontModTitleRef = 22f;
+    private const float FontSectionRef = 18f;
+    private const float FontLabelRef = 17f;
+    private const float FontBodyRef = 16f;
+    private const float FontSmallRef = 14f;
 
-    public static InputField KeyBindInput;
-    public static InputField RepositionKeyBindInput;
+    private static UIWindow _window;
+    private static bool _visible;
+    private static bool _cursorHeld;
+    private static TMP_InputField _activeInput;
+    private static readonly List<UIDropdown> _openDropdowns = new List<UIDropdown>();
+    private static StickyModTitleController _stickyTitles;
+
+    // Toolbar (fixed above scroll content)
+    private static RectTransform _toolbarRoot;
+    private static UIInputField _searchField;
+    private static UIDropdown _sortDropdown;
+    private static UIToggle _hideEmptyToggle;
+    private static UIToggle _groupByAuthorToggle;
+    private static UIButton _expandCollapseAllBtn;
+    private static readonly List<UIButton> _filterChipButtons = new List<UIButton>();
+    private static string _searchQuery = "";
+    private static bool _suppressToolbarCallbacks;
+    private static string[] _cfgFilesCache;
+
+    // Collapse state (keys = GUID or Name). Empty set = all expanded (default).
+    private static readonly HashSet<string> _collapsedMods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<ModBlockState> _modBlocks = new List<ModBlockState>();
+
+    private sealed class ModBlockState
+    {
+        public string Key;
+        public GameObject Body;
+        public TextMeshProUGUI Chevron;
+        public RectTransform TitleRect;
+        public string TitleRichText;
+        public bool IsExpanded;
+    }
+
+
+    private static readonly string[] SortModeIds =
+    {
+        "Alphabetical",
+        "AlphabeticalDesc",
+        "LoadOrder",
+        "SandboxFirst",
+        "HasConfigFirst"
+    };
+
+    private static readonly string[] SortModeLabels =
+    {
+        "A–Z",
+        "Z–A",
+        "Load order",
+        "Sandbox first",
+        "Has config first"
+    };
+
+    private static readonly string[] FilterChipIds = { "All", "Sandbox", "ClientSide" };
+    private static readonly string[] FilterChipLabels = { "All", "Sandbox", "Client-side" };
+
+    public static TMP_InputField KeyBindInput;
+    public static TMP_InputField RepositionKeyBindInput;
     public static bool IsVisible => _visible;
 
     private static Dictionary<string, Dictionary<string, string[]>> _cachedOptions =
         new Dictionary<string, Dictionary<string, string[]>>();
+
 
     /// <summary>
     /// Unfocus inputs, close dropdowns, and clear EventSystem selection so scroll/pan
@@ -47,7 +101,7 @@ public class ModConfigGUI : MonoBehaviour
         {
             var dd = _openDropdowns[i];
             if (dd != null)
-                dd.SetActive(false);
+                dd.CloseList();
         }
         _openDropdowns.Clear();
 
@@ -55,20 +109,20 @@ public class ModConfigGUI : MonoBehaviour
             EventSystem.current.SetSelectedGameObject(null);
     }
 
-    private static void RegisterOpenDropdown(GameObject listObj)
+    private static void RegisterOpenDropdown(UIDropdown dropdown)
     {
-        if (listObj == null)
+        if (dropdown == null)
             return;
-        if (!_openDropdowns.Contains(listObj))
-            _openDropdowns.Add(listObj);
+        if (!_openDropdowns.Contains(dropdown))
+            _openDropdowns.Add(dropdown);
     }
 
-    private static void UnregisterDropdown(GameObject listObj)
+    private static void UnregisterDropdown(UIDropdown dropdown)
     {
-        _openDropdowns.Remove(listObj);
+        _openDropdowns.Remove(dropdown);
     }
 
-    private static void ActivateInput(InputField input)
+    private static void ActivateInput(TMP_InputField input)
     {
         if (input == null)
             return;
@@ -85,7 +139,7 @@ public class ModConfigGUI : MonoBehaviour
 
     public static void Toggle()
     {
-        if (_modWindow == null)
+        if (_window == null || _window.GameObject == null)
         {
             try
             {
@@ -93,27 +147,59 @@ public class ModConfigGUI : MonoBehaviour
             }
             catch (Exception e)
             {
-                SparrohPlugin.Logger.LogError($"Error creating GUI: {e.Message}");
+                SparrohPlugin.Logger.LogError($"Error creating GUI: {e}");
                 return;
             }
         }
 
-        _visible = !_visible;
-        _modWindow.SetActive(_visible);
         if (_visible)
-        {
-            HoldCursor();
-            RefreshMods();
-        }
+            Hide();
         else
+            Show();
+    }
+
+    public static void Show()
+    {
+        if (_window == null || _window.GameObject == null)
         {
-            ClearActiveEditing();
-            ReleaseCursor();
+            try
+            {
+                CreateGUI();
+            }
+            catch (Exception e)
+            {
+                SparrohPlugin.Logger.LogError($"Error creating GUI: {e}");
+                return;
+            }
         }
+
+        if (_visible)
+            return;
+
+        // Opening config should not stack with HUD reposition mode.
+        if (HudRepositionMode.IsActive)
+            HudRepositionMode.Exit();
+
+        _visible = true;
+        _window.Show();
+        HoldCursor();
+
+        // Search is session-only; clear each open so the full list is visible.
+        _searchQuery = "";
+        if (_searchField != null)
+        {
+            _suppressToolbarCallbacks = true;
+            _searchField.Text = "";
+            _suppressToolbarCallbacks = false;
+        }
+
+        SyncToolbarFromConfig();
+        RefreshMods(resetScroll: true);
 
         if (EventSystem.current != null)
             EventSystem.current.SetSelectedGameObject(null);
     }
+
 
     /// <summary>Close the config window without toggling (e.g. when entering reposition mode).</summary>
     public static void Hide()
@@ -122,9 +208,9 @@ public class ModConfigGUI : MonoBehaviour
             return;
 
         _visible = false;
-        if (_modWindow != null)
-            _modWindow.SetActive(false);
         ClearActiveEditing();
+        if (_window != null)
+            _window.Hide(invokeClose: false);
         ReleaseCursor();
 
         if (EventSystem.current != null)
@@ -149,184 +235,862 @@ public class ModConfigGUI : MonoBehaviour
 
     private static void CreateGUI()
     {
-        var canvas = new GameObject("ModConfigCanvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-        canvas.transform.SetParent(null, false);
-        var can = canvas.GetComponent<Canvas>();
-        if (can != null)
+        UITheme.Initialize();
+
+        _window = UIWindow.Create(
+            "ModConfig",
+            new Vector2(520f, 640f),
+            "Mod Configs",
+            scrollable: true,
+            closeButton: true,
+            sortingOrder: UITheme.WindowSortingOrder + 10);
+
+
+        _window.OnClose(() =>
         {
-            can.renderMode = RenderMode.ScreenSpaceOverlay;
-            can.sortingOrder = 100;
-        }
-
-        var panel = new GameObject("ModConfigPanel", typeof(Image));
-        panel.transform.SetParent(canvas.transform, false);
-        var panelRect = panel.GetComponent<RectTransform>();
-        panelRect.anchorMin = new Vector2(0.5f, 0.5f);
-        panelRect.anchorMax = new Vector2(0.5f, 0.5f);
-        panelRect.pivot = new Vector2(0.5f, 0.5f);
-        panelRect.sizeDelta = new Vector2(800, 600);
-
-        var image = panel.GetComponent<Image>();
-        image.color = new Color(0.15f, 0.15f, 0.2f, 0.95f);
-
-        var titleObj = new GameObject("Title", typeof(Image));
-        titleObj.transform.SetParent(panel.transform, false);
-        var titleImg = titleObj.GetComponent<Image>();
-        titleImg.color = new Color(0.4f, 0.4f, 0.5f, 1f);
-        var titleRect = titleObj.GetComponent<RectTransform>();
-        titleRect.anchorMin = new Vector2(0, 1);
-        titleRect.anchorMax = new Vector2(1, 1);
-        titleRect.offsetMin = new Vector2(10, -50);
-        titleRect.offsetMax = new Vector2(-10, -10);
-
-        var titleTextObj = new GameObject("TitleText", typeof(Text));
-        titleTextObj.transform.SetParent(titleObj.transform, false);
-        var titleTextRect = titleTextObj.GetComponent<RectTransform>();
-        titleTextRect.anchorMin = Vector2.zero;
-        titleTextRect.anchorMax = Vector2.one;
-        titleTextRect.offsetMin = Vector2.zero;
-        titleTextRect.offsetMax = Vector2.zero;
-        var titleText = titleTextObj.GetComponent<Text>();
-        titleText.text = "Mod Configurations";
-        titleText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        titleText.fontSize = 26;
-        titleText.color = new Color(1f, 1f, 1f, 1f);
-        titleText.alignment = TextAnchor.MiddleCenter;
-
-        // Reposition HUDs button in the title bar
-        var repoBtnObj = new GameObject("RepositionButton", typeof(Image), typeof(Button));
-        repoBtnObj.transform.SetParent(titleObj.transform, false);
-        var repoBtnRect = repoBtnObj.GetComponent<RectTransform>();
-        repoBtnRect.anchorMin = new Vector2(1, 0.5f);
-        repoBtnRect.anchorMax = new Vector2(1, 0.5f);
-        repoBtnRect.pivot = new Vector2(1, 0.5f);
-        repoBtnRect.sizeDelta = new Vector2(150, 28);
-        repoBtnRect.anchoredPosition = new Vector2(-8, 0);
-        var repoBtnImg = repoBtnObj.GetComponent<Image>();
-        repoBtnImg.color = new Color(0.25f, 0.55f, 0.85f, 1f);
-        var repoBtn = repoBtnObj.GetComponent<Button>();
-        repoBtn.targetGraphic = repoBtnImg;
-        var repoBtnTextObj = new GameObject("Text", typeof(Text));
-        repoBtnTextObj.transform.SetParent(repoBtnObj.transform, false);
-        var repoBtnTextRect = repoBtnTextObj.GetComponent<RectTransform>();
-        repoBtnTextRect.anchorMin = Vector2.zero;
-        repoBtnTextRect.anchorMax = Vector2.one;
-        repoBtnTextRect.offsetMin = Vector2.zero;
-        repoBtnTextRect.offsetMax = Vector2.zero;
-        var repoBtnText = repoBtnTextObj.GetComponent<Text>();
-        repoBtnText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        repoBtnText.fontSize = 13;
-        repoBtnText.color = Color.white;
-        repoBtnText.alignment = TextAnchor.MiddleCenter;
-        repoBtnText.text = "Reposition HUDs";
-        repoBtn.onClick.AddListener(() =>
-        {
-            Hide();
-            HudRepositionMode.Enter();
+            // Close button path — keep state in sync.
+            if (!_visible)
+                return;
+            _visible = false;
+            ClearActiveEditing();
+            ReleaseCursor();
+            if (EventSystem.current != null)
+                EventSystem.current.SetSelectedGameObject(null);
         });
 
-        var scrollObj = new GameObject("ScrollView", typeof(ScrollRect), typeof(Image));
-        scrollObj.transform.SetParent(panel.transform, false);
-        var scrollRect = scrollObj.GetComponent<RectTransform>();
-        scrollRect.anchorMin = new Vector2(0, 0);
-        scrollRect.anchorMax = new Vector2(1, 1);
-        scrollRect.offsetMin = new Vector2(20, 20);
-        scrollRect.offsetMax = new Vector2(-20, -60);
-
-        var scrollImg = scrollObj.GetComponent<Image>();
-        scrollImg.color = new Color(0.1f, 0.1f, 0.15f, 0.8f);
-
-        // Proper viewport so ScrollRect masks and measures content correctly
-        var viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
-        viewportObj.transform.SetParent(scrollObj.transform, false);
-        var viewportRect = viewportObj.GetComponent<RectTransform>();
-        viewportRect.anchorMin = Vector2.zero;
-        viewportRect.anchorMax = Vector2.one;
-        viewportRect.offsetMin = Vector2.zero;
-        viewportRect.offsetMax = Vector2.zero;
-        var viewportImg = viewportObj.GetComponent<Image>();
-        viewportImg.color = Color.white;
-        var viewportMask = viewportObj.GetComponent<Mask>();
-        viewportMask.showMaskGraphic = false;
-
-        var scrollComponent = scrollObj.GetComponent<ScrollRect>();
-        var scrollContent = new GameObject("Content", typeof(VerticalLayoutGroup));
-        scrollContent.transform.SetParent(viewportObj.transform, false);
-        var contentRect = scrollContent.GetComponent<RectTransform>();
-        contentRect.anchorMin = new Vector2(0, 1);
-        contentRect.anchorMax = new Vector2(1, 1);
-        contentRect.pivot = new Vector2(0.5f, 1);
-        contentRect.sizeDelta = new Vector2(0, 0);
-
-        scrollComponent.content = contentRect;
-        scrollComponent.viewport = viewportRect;
-        scrollComponent.vertical = true;
-        scrollComponent.horizontal = false;
-        // Disable built-in wheel scaling; ItemStepScrollHandler moves one item per notch.
-        scrollComponent.scrollSensitivity = 0f;
-        scrollComponent.movementType = ScrollRect.MovementType.Clamped;
-        scrollComponent.inertia = true;
-
-        var layout = scrollContent.GetComponent<VerticalLayoutGroup>();
-        layout.childControlHeight = true;
-        layout.childControlWidth = true;
-        layout.childForceExpandHeight = false;
-        layout.childForceExpandWidth = true;
-        layout.spacing = 15;
-        layout.padding = new RectOffset(20, 20, 15, 20);
-
-        var fitter = scrollContent.AddComponent<ContentSizeFitter>();
-        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-
-        // One wheel notch = one config item; clear edits when scrolling/dragging
-        var stepScroll = scrollObj.AddComponent<ItemStepScrollHandler>();
-        stepScroll.Initialize(scrollComponent, ItemScrollStep);
-
-        _modWindow = panel;
-        _scrollView = scrollObj;
-        _scrollRect = scrollComponent;
-        _content = scrollContent;
-        _layoutGroup = layout;
-    }
-
-    public static void RefreshMods()
-    {
-        ClearActiveEditing();
-
-        foreach (Transform child in _content.transform)
+        // Enlarge + bold the window title; left-align so it doesn't collide with right-side controls.
+        if (_window.TitleText != null)
         {
-            Destroy(child.gameObject);
+            _window.TitleText.fontSize = UITheme.S(FontTitleRef);
+            _window.TitleText.fontStyle = FontStyles.Bold;
+            _window.TitleText.color = UIColors.TextPrimary;
+            _window.TitleText.alignment = TextAlignmentOptions.Left;
+            // Leave room on the right for Reposition + close (X).
+            UIHelpers.SetFillParent(_window.TitleText.rectTransform, UITheme.S(8f));
+            _window.TitleText.rectTransform.offsetMax = new Vector2(-UITheme.S(200f), -UITheme.S(4f));
+            _window.TitleText.rectTransform.offsetMin = new Vector2(UITheme.S(10f), UITheme.S(4f));
         }
 
-        foreach (Transform child in _modWindow.transform.parent)
+        // Reposition HUDs button on the title bar (right side, left of close).
+        try
         {
-            if (child.name == "List")
+            var titleBar = _window.TitleText != null
+                ? _window.TitleText.transform.parent as RectTransform
+                : null;
+            if (titleBar != null)
             {
-                Destroy(child.gameObject);
+                var repoBtn = UIButton.Create(
+                    titleBar,
+                    "Reposition HUDs",
+                    () =>
+                    {
+                        Hide();
+                        HudRepositionMode.Enter();
+                    },
+                    UIButtonStyle.Primary,
+                    "RepositionButton",
+                    preferredHeight: UITheme.S(28f));
+
+                var crt = repoBtn.Rect;
+                crt.anchorMin = crt.anchorMax = new Vector2(1f, 0.5f);
+                crt.pivot = new Vector2(1f, 0.5f);
+                crt.sizeDelta = new Vector2(UITheme.S(150f), UITheme.S(28f));
+                // Leave room for the close (X) button.
+                crt.anchoredPosition = new Vector2(-UITheme.S(48f), 0f);
+
+                var le = repoBtn.GameObject.GetComponent<LayoutElement>();
+                if (le != null)
+                    UnityEngine.Object.Destroy(le);
+
+                if (repoBtn.Label != null)
+                {
+                    repoBtn.Label.fontSize = UITheme.S(FontSmallRef);
+                    repoBtn.Label.fontStyle = FontStyles.Bold;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            SparrohPlugin.Logger.LogWarning($"Could not add Reposition button to title bar: {e.Message}");
+        }
+
+
+        // Wheel snaps one content row at a time (sticky-aware); clear edits when scrolling/dragging.
+        if (_window.ScrollView != null)
+        {
+            var scroll = _window.ScrollView.ScrollRect;
+            scroll.scrollSensitivity = 0f;
+
+            // Sticky mod titles: floating bar over the viewport, pinned while scrolling a mod's settings.
+            _stickyTitles = CreateStickyModTitleOverlay(_window.ScrollView);
+
+            var stepScroll = _window.ScrollView.GameObject.AddComponent<ItemStepScrollHandler>();
+            stepScroll.Initialize(scroll, _stickyTitles);
+
+            // Fixed toolbar above the scroll viewport (search / sort / filters).
+            CreateToolbar(_window.ScrollView);
+        }
+
+        // Start hidden until Show/Toggle.
+        _window.Hide(invokeClose: false);
+        _visible = false;
+    }
+
+    /// <summary>
+    /// Builds a non-scrolling toolbar (search, sort, hide-empty, filter chips) pinned to the
+    /// top of the window body, and insets the scroll view below it.
+    /// </summary>
+    private static void CreateToolbar(UIScrollView scrollView)
+    {
+        var body = scrollView.Rect.parent as RectTransform;
+        if (body == null)
+            return;
+
+        float pad = UITheme.S(4f);
+        float searchH = UITheme.S(34f);
+        float rowH = UITheme.S(30f);
+        float gap = UITheme.S(5f);
+        // 4 rows: search | sort+hide | chips | group+expand
+        float toolbarH = pad + searchH + gap + rowH + gap + rowH + gap + rowH + pad;
+
+
+        // Inset scroll view under the toolbar.
+        var scrollRt = scrollView.Rect;
+        scrollRt.offsetMax = new Vector2(scrollRt.offsetMax.x, -toolbarH);
+
+        var toolbarBg = UIFactory.CreateImage("Toolbar", body, UIColors.Surface, raycast: true);
+        UIFactory.ApplyWhiteSprite(toolbarBg);
+        _toolbarRoot = toolbarBg.rectTransform;
+        UIHelpers.SetTopStretch(_toolbarRoot, toolbarH, left: 0f, right: 0f, top: 0f);
+        _toolbarRoot.SetAsLastSibling();
+
+        // Accent under toolbar (separates from list) — ignore layout so it doesn't steal a row.
+        var accent = UIFactory.CreateImage("ToolbarAccent", _toolbarRoot, UIColors.BorderAccent, raycast: false);
+        UIFactory.ApplyWhiteSprite(accent);
+        var accentRt = accent.rectTransform;
+        accentRt.anchorMin = new Vector2(0f, 0f);
+        accentRt.anchorMax = new Vector2(1f, 0f);
+        accentRt.pivot = new Vector2(0.5f, 0f);
+        accentRt.sizeDelta = new Vector2(0f, UITheme.S(2f));
+        accentRt.anchoredPosition = Vector2.zero;
+        var accentLe = accent.gameObject.AddComponent<LayoutElement>();
+        accentLe.ignoreLayout = true;
+
+        UIFactory.AddVerticalLayout(
+            toolbarBg.gameObject,
+            gap,
+            UITheme.ScaledPadding(8, 8, 6, 8),
+            TextAnchor.UpperLeft,
+            controlChildHeight: true,
+            expandHeight: false,
+            controlChildWidth: true,
+            expandWidth: true);
+
+        // ── Row 1: search ────────────────────────────────────────────────
+        _searchField = UIInputField.Create(
+            _toolbarRoot,
+            "",
+            "Search mods…",
+            onChanged: query =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                _searchQuery = query ?? "";
+                RefreshMods(resetScroll: true, preserveSearchFocus: true);
+            },
+            name: "SearchField");
+        UIHelpers.EnsureLayoutElement(_searchField.GameObject,
+            preferredHeight: searchH,
+            minHeight: searchH);
+        if (_searchField.TextComponent != null)
+        {
+            _searchField.TextComponent.fontSize = UITheme.S(FontBodyRef);
+            _searchField.TextComponent.alignment = TextAlignmentOptions.Left;
+        }
+        if (_searchField.Placeholder != null)
+        {
+            _searchField.Placeholder.fontSize = UITheme.S(FontBodyRef);
+            _searchField.Placeholder.alignment = TextAlignmentOptions.Left;
+        }
+
+        // ── Row 2: sort + hide empty ─────────────────────────────────────
+        var row2 = UIFactory.CreateRect("SortRow", _toolbarRoot);
+        UIHelpers.EnsureLayoutElement(row2.gameObject, preferredHeight: rowH, minHeight: rowH);
+        UIFactory.AddHorizontalLayout(
+            row2.gameObject,
+            UITheme.S(8f),
+            new RectOffset(0, 0, 0, 0),
+            TextAnchor.MiddleLeft,
+            controlChildWidth: true,
+            expandWidth: false,
+            controlChildHeight: true,
+            expandHeight: true);
+
+        int initialSort = IndexOfSortMode(SparrohPlugin.ModSortMode?.Value);
+        _sortDropdown = UIDropdown.Create(
+            row2,
+            SortModeLabels,
+            initialSort,
+            onChanged: null,
+            name: "SortDropdown");
+        var sortLe = UIHelpers.EnsureLayoutElement(_sortDropdown.GameObject,
+            preferredWidth: UITheme.S(160f),
+            preferredHeight: rowH,
+            minHeight: rowH);
+        sortLe.flexibleWidth = 1f;
+        if (_sortDropdown.Label != null)
+        {
+            _sortDropdown.Label.fontSize = UITheme.S(FontSmallRef);
+            _sortDropdown.Label.fontStyle = FontStyles.Bold;
+        }
+
+        // Explicit open/close so we track the dropdown like config fields.
+        var sortMainBtn = _sortDropdown.GameObject.GetComponentInChildren<Button>();
+        if (sortMainBtn != null)
+        {
+            sortMainBtn.onClick.RemoveAllListeners();
+            sortMainBtn.onClick.AddListener(() =>
+            {
+                var list = _sortDropdown.GameObject.transform.Find("List");
+                bool wasOpen = list != null && list.gameObject.activeSelf;
+                ClearActiveEditing();
+                if (!wasOpen)
+                {
+                    _sortDropdown.OpenList();
+                    // List is a child of the sort row; chip row is drawn later and would cover it.
+                    EnsureDropdownListOverlay(list);
+                    RegisterOpenDropdown(_sortDropdown);
+                }
+            });
+        }
+
+
+        _sortDropdown.OnChanged((idx, _) =>
+        {
+            if (_suppressToolbarCallbacks)
+                return;
+            string mode = SortModeIds[Mathf.Clamp(idx, 0, SortModeIds.Length - 1)];
+            if (SparrohPlugin.ModSortMode != null && SparrohPlugin.ModSortMode.Value != mode)
+            {
+                SparrohPlugin.ModSortMode.Value = mode;
+                SparrohPlugin.ModSortMode.ConfigFile.Save();
+            }
+            UnregisterDropdown(_sortDropdown);
+            RefreshMods(resetScroll: true);
+        });
+
+        _hideEmptyToggle = UIToggle.Create(
+            row2,
+            "Hide empty",
+            SparrohPlugin.HideModsWithoutConfig?.Value ?? true,
+            onChanged: val =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                if (SparrohPlugin.HideModsWithoutConfig != null &&
+                    SparrohPlugin.HideModsWithoutConfig.Value != val)
+                {
+                    SparrohPlugin.HideModsWithoutConfig.Value = val;
+                    SparrohPlugin.HideModsWithoutConfig.ConfigFile.Save();
+                }
+                RefreshMods(resetScroll: true);
+            },
+            name: "HideEmptyToggle");
+        var hideLe = UIHelpers.EnsureLayoutElement(_hideEmptyToggle.GameObject,
+            preferredWidth: UITheme.S(120f),
+            preferredHeight: rowH);
+        hideLe.flexibleWidth = 0f;
+        if (_hideEmptyToggle.Label != null)
+            _hideEmptyToggle.Label.fontSize = UITheme.S(FontSmallRef);
+
+        // ── Row 3: filter chips ──────────────────────────────────────────
+        var row3 = UIFactory.CreateRect("ChipRow", _toolbarRoot);
+        UIHelpers.EnsureLayoutElement(row3.gameObject, preferredHeight: rowH, minHeight: rowH);
+        UIFactory.AddHorizontalLayout(
+            row3.gameObject,
+            UITheme.S(6f),
+            new RectOffset(0, 0, 0, 0),
+            TextAnchor.MiddleLeft,
+            controlChildWidth: true,
+            expandWidth: true,
+            controlChildHeight: true,
+            expandHeight: true);
+
+        _filterChipButtons.Clear();
+        string activeFilter = NormalizeFilter(SparrohPlugin.ModListFilter?.Value);
+        for (int i = 0; i < FilterChipIds.Length; i++)
+        {
+            string chipId = FilterChipIds[i];
+            string chipLabel = FilterChipLabels[i];
+            bool selected = string.Equals(chipId, activeFilter, StringComparison.OrdinalIgnoreCase);
+            var chip = UIButton.Create(
+                row3,
+                chipLabel,
+                onClick: null,
+                style: selected ? UIButtonStyle.Active : UIButtonStyle.Default,
+                name: "Filter_" + chipId,
+                preferredHeight: rowH);
+            var chipLe = UIHelpers.EnsureLayoutElement(chip.GameObject,
+                preferredHeight: rowH,
+                minHeight: rowH);
+            chipLe.flexibleWidth = 1f;
+            chipLe.preferredWidth = -1f;
+            if (chip.Label != null)
+            {
+                chip.Label.fontSize = UITheme.S(FontSmallRef);
+                chip.Label.fontStyle = FontStyles.Bold;
+            }
+
+            string capturedId = chipId;
+            chip.OnClick(() =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                ApplyFilterChip(capturedId);
+            });
+            _filterChipButtons.Add(chip);
+        }
+
+        // ── Row 4: group by author + expand/collapse all ─────────────────
+        var row4 = UIFactory.CreateRect("DensityRow", _toolbarRoot);
+        UIHelpers.EnsureLayoutElement(row4.gameObject, preferredHeight: rowH, minHeight: rowH);
+        UIFactory.AddHorizontalLayout(
+            row4.gameObject,
+            UITheme.S(8f),
+            new RectOffset(0, 0, 0, 0),
+            TextAnchor.MiddleLeft,
+            controlChildWidth: true,
+            expandWidth: false,
+            controlChildHeight: true,
+            expandHeight: true);
+
+        _groupByAuthorToggle = UIToggle.Create(
+            row4,
+            "Group by author",
+            SparrohPlugin.GroupModsByAuthor?.Value ?? false,
+            onChanged: val =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                if (SparrohPlugin.GroupModsByAuthor != null &&
+                    SparrohPlugin.GroupModsByAuthor.Value != val)
+                {
+                    SparrohPlugin.GroupModsByAuthor.Value = val;
+                    SparrohPlugin.GroupModsByAuthor.ConfigFile.Save();
+                }
+                RefreshMods(resetScroll: true);
+            },
+            name: "GroupByAuthorToggle");
+        var groupLe = UIHelpers.EnsureLayoutElement(_groupByAuthorToggle.GameObject,
+            preferredWidth: UITheme.S(150f),
+            preferredHeight: rowH);
+        groupLe.flexibleWidth = 1f;
+        if (_groupByAuthorToggle.Label != null)
+            _groupByAuthorToggle.Label.fontSize = UITheme.S(FontSmallRef);
+
+        _expandCollapseAllBtn = UIButton.Create(
+            row4,
+            "Collapse all",
+            onClick: () =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                ToggleExpandCollapseAll();
+            },
+            style: UIButtonStyle.Default,
+            name: "ExpandCollapseAll",
+            preferredHeight: rowH);
+        var expLe = UIHelpers.EnsureLayoutElement(_expandCollapseAllBtn.GameObject,
+            preferredWidth: UITheme.S(120f),
+            preferredHeight: rowH);
+        expLe.flexibleWidth = 0f;
+        if (_expandCollapseAllBtn.Label != null)
+        {
+            _expandCollapseAllBtn.Label.fontSize = UITheme.S(FontSmallRef);
+            _expandCollapseAllBtn.Label.fontStyle = FontStyles.Bold;
+        }
+    }
+
+
+
+    private static void SyncToolbarFromConfig()
+    {
+        _suppressToolbarCallbacks = true;
+        try
+        {
+            if (_sortDropdown != null)
+            {
+                int idx = IndexOfSortMode(SparrohPlugin.ModSortMode?.Value);
+                _sortDropdown.Select(idx, notify: false);
+            }
+
+            if (_hideEmptyToggle != null && SparrohPlugin.HideModsWithoutConfig != null)
+                _hideEmptyToggle.IsOn = SparrohPlugin.HideModsWithoutConfig.Value;
+
+            if (_groupByAuthorToggle != null && SparrohPlugin.GroupModsByAuthor != null)
+                _groupByAuthorToggle.IsOn = SparrohPlugin.GroupModsByAuthor.Value;
+
+            RefreshFilterChipStyles(NormalizeFilter(SparrohPlugin.ModListFilter?.Value));
+            UpdateExpandCollapseAllLabel();
+        }
+        finally
+        {
+            _suppressToolbarCallbacks = false;
+        }
+    }
+
+
+    private static void ApplyFilterChip(string filterId)
+    {
+        filterId = NormalizeFilter(filterId);
+        if (SparrohPlugin.ModListFilter != null &&
+            !string.Equals(SparrohPlugin.ModListFilter.Value, filterId, StringComparison.OrdinalIgnoreCase))
+        {
+            SparrohPlugin.ModListFilter.Value = filterId;
+            SparrohPlugin.ModListFilter.ConfigFile.Save();
+        }
+
+        RefreshFilterChipStyles(filterId);
+        RefreshMods(resetScroll: true);
+    }
+
+    private static void RefreshFilterChipStyles(string activeFilter)
+    {
+        activeFilter = NormalizeFilter(activeFilter);
+        for (int i = 0; i < _filterChipButtons.Count && i < FilterChipIds.Length; i++)
+        {
+            bool on = string.Equals(FilterChipIds[i], activeFilter, StringComparison.OrdinalIgnoreCase);
+            _filterChipButtons[i].SetStyle(on ? UIButtonStyle.Active : UIButtonStyle.Default);
+        }
+    }
+
+    private static int IndexOfSortMode(string mode)
+    {
+        if (string.IsNullOrEmpty(mode))
+            return 0;
+        for (int i = 0; i < SortModeIds.Length; i++)
+        {
+            if (string.Equals(SortModeIds[i], mode, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return 0;
+    }
+
+    private static string NormalizeFilter(string filter)
+    {
+        if (string.IsNullOrEmpty(filter))
+            return "All";
+        for (int i = 0; i < FilterChipIds.Length; i++)
+        {
+            if (string.Equals(FilterChipIds[i], filter, StringComparison.OrdinalIgnoreCase))
+                return FilterChipIds[i];
+        }
+        return "All";
+    }
+
+    /// <summary>
+    /// Raise a dropdown option list above later toolbar siblings (e.g. filter chips)
+    /// via a nested Canvas with override sorting. Safe to call repeatedly.
+    /// </summary>
+    private static void EnsureDropdownListOverlay(Transform list)
+    {
+        if (list == null)
+            return;
+
+        var go = list.gameObject;
+        var canvas = go.GetComponent<Canvas>();
+        if (canvas == null)
+            canvas = go.AddComponent<Canvas>();
+
+        canvas.overrideSorting = true;
+        // Window uses WindowSortingOrder + 10; sit clearly above toolbar chrome.
+        canvas.sortingOrder = UITheme.WindowSortingOrder + 50;
+
+        if (go.GetComponent<GraphicRaycaster>() == null)
+            go.AddComponent<GraphicRaycaster>();
+
+        // Keep list from participating in parent layout while open (overflow popup).
+        var le = go.GetComponent<LayoutElement>();
+        if (le == null)
+            le = go.AddComponent<LayoutElement>();
+        le.ignoreLayout = true;
+    }
+
+    // ── Collapse / group helpers ─────────────────────────────────────────
+
+    private static string GetModKey(ModInfo mod)
+    {
+        if (!string.IsNullOrEmpty(mod.GUID))
+            return mod.GUID;
+        return mod.Name ?? "";
+    }
+
+    /// <summary>GUID prefix before first '.' (e.g. sparroh.mod → sparroh), else Other.</summary>
+    private static string GetAuthorGroup(ModInfo mod)
+    {
+        string guid = mod.GUID;
+        if (string.IsNullOrEmpty(guid))
+            return "Other";
+        int dot = guid.IndexOf('.');
+        if (dot <= 0)
+            return "Other";
+        return guid.Substring(0, dot);
+    }
+
+    private static void LoadCollapsedFromConfig()
+    {
+        _collapsedMods.Clear();
+        string raw = SparrohPlugin.CollapsedMods?.Value;
+        if (string.IsNullOrWhiteSpace(raw))
+            return;
+        foreach (string part in raw.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string key = part.Trim();
+            if (key.Length > 0)
+                _collapsedMods.Add(key);
+        }
+    }
+
+    private static void SaveCollapsedToConfig()
+    {
+        if (SparrohPlugin.CollapsedMods == null)
+            return;
+        string value = _collapsedMods.Count == 0
+            ? ""
+            : string.Join(",", _collapsedMods);
+        if (SparrohPlugin.CollapsedMods.Value == value)
+            return;
+        SparrohPlugin.CollapsedMods.Value = value;
+        SparrohPlugin.CollapsedMods.ConfigFile.Save();
+    }
+
+    private static bool IsModExpanded(string key) => !_collapsedMods.Contains(key);
+
+    private static void SetModExpanded(string key, bool expanded)
+    {
+        if (string.IsNullOrEmpty(key))
+            return;
+        if (expanded)
+            _collapsedMods.Remove(key);
+        else
+            _collapsedMods.Add(key);
+        SaveCollapsedToConfig();
+    }
+
+    private static void ApplyBlockExpanded(ModBlockState block, bool expanded, bool persist)
+    {
+        if (block == null)
+            return;
+        block.IsExpanded = expanded;
+        if (block.Body != null)
+            block.Body.SetActive(expanded);
+        if (block.Chevron != null)
+            block.Chevron.text = expanded ? "-" : "+";
+
+        if (persist)
+            SetModExpanded(block.Key, expanded);
+
+        SyncStickyTitleForBlock(block);
+    }
+
+    private static string FormatStickyTitle(ModBlockState block)
+    {
+        if (block == null)
+            return "";
+        return (block.IsExpanded ? "- " : "+ ") + (block.TitleRichText ?? "");
+    }
+
+    private static void SyncStickyTitleForBlock(ModBlockState block)
+    {
+        if (block == null || block.TitleRect == null)
+            return;
+        _stickyTitles?.UpdateTitle(block.TitleRect, FormatStickyTitle(block));
+    }
+
+    /// <summary>Toggle one mod block (in-list title or sticky header).</summary>
+    private static void ToggleModBlock(ModBlockState block)
+    {
+        if (block == null)
+            return;
+        ClearActiveEditing();
+        ApplyBlockExpanded(block, !block.IsExpanded, persist: true);
+        _stickyTitles?.Refresh();
+        UpdateExpandCollapseAllLabel();
+    }
+
+    private static ModBlockState FindModBlock(string key)
+    {
+        if (string.IsNullOrEmpty(key))
+            return null;
+        for (int i = 0; i < _modBlocks.Count; i++)
+        {
+            var block = _modBlocks[i];
+            if (block != null && string.Equals(block.Key, key, StringComparison.OrdinalIgnoreCase))
+                return block;
+        }
+        return null;
+    }
+
+    /// <summary>Called by sticky header click for the currently pinned mod.</summary>
+    internal static void ToggleModBlockByKey(string key)
+    {
+        ToggleModBlock(FindModBlock(key));
+    }
+
+    private static void ToggleExpandCollapseAll()
+    {
+        // If any visible block is expanded → collapse all; else expand all.
+        bool anyExpanded = false;
+        for (int i = 0; i < _modBlocks.Count; i++)
+        {
+            if (_modBlocks[i] != null && _modBlocks[i].IsExpanded)
+            {
+                anyExpanded = true;
+                break;
             }
         }
 
+        bool expand = !anyExpanded;
+        for (int i = 0; i < _modBlocks.Count; i++)
+        {
+            var block = _modBlocks[i];
+            if (block == null)
+                continue;
+            ApplyBlockExpanded(block, expand, persist: false);
+            if (expand)
+                _collapsedMods.Remove(block.Key);
+            else
+                _collapsedMods.Add(block.Key);
+        }
+
+        SaveCollapsedToConfig();
+        UpdateExpandCollapseAllLabel();
+        _stickyTitles?.Refresh();
+    }
+
+
+    private static void UpdateExpandCollapseAllLabel()
+    {
+        if (_expandCollapseAllBtn?.Label == null)
+            return;
+        bool anyExpanded = false;
+        if (_modBlocks.Count == 0)
+        {
+            // Before first refresh, assume default all-expanded.
+            anyExpanded = _collapsedMods.Count == 0;
+        }
+        else
+        {
+            for (int i = 0; i < _modBlocks.Count; i++)
+            {
+                if (_modBlocks[i] != null && _modBlocks[i].IsExpanded)
+                {
+                    anyExpanded = true;
+                    break;
+                }
+            }
+        }
+
+        _expandCollapseAllBtn.SetText(anyExpanded ? "Collapse all" : "Expand all");
+    }
+
+    private static void CreateGroupHeader(Transform parent, string groupName)
+    {
+        var bar = UIFactory.CreateImage("Group_" + groupName, parent, UIColors.SectionBar, raycast: false);
+        UIFactory.ApplyWhiteSprite(bar);
+        UIHelpers.EnsureLayoutElement(bar.gameObject,
+            preferredHeight: UITheme.S(28f),
+            minHeight: UITheme.S(28f));
+
+        string label = string.IsNullOrEmpty(groupName) ? "Other" : groupName;
+        var tmp = UIFactory.CreateTmp(
+            "Text",
+            bar.rectTransform,
+            RichText.Bold(label),
+            UITheme.S(FontSectionRef),
+            UIColors.TextSecondary,
+            TextAlignmentOptions.MidlineLeft);
+        UIHelpers.SetFillParent(tmp.rectTransform, UITheme.S(8f));
+    }
+
+
+
+
+    /// <summary>
+    /// Builds a floating mod-title bar as a child of the scroll viewport (masked on push-off)
+    /// and attaches the controller that keeps it in sync with scroll position.
+    /// </summary>
+    private static StickyModTitleController CreateStickyModTitleOverlay(UIScrollView scrollView)
+    {
+        float headerH = UITheme.S(44f);
+
+        // Raycast on so the pinned title can collapse/expand like the in-list header.
+        var stickyImg = UIFactory.CreateImage(
+            "StickyModTitle",
+            scrollView.Viewport,
+            UIColors.TitleBar,
+            raycast: true);
+        UIFactory.ApplyWhiteSprite(stickyImg);
+
+        var stickyRt = stickyImg.rectTransform;
+        UIHelpers.SetTopStretch(stickyRt, headerH, left: 0f, right: 0f, top: 0f);
+        stickyRt.SetAsLastSibling();
+
+        // Accent line under the sticky bar (matches window title chrome).
+        var accent = UIFactory.CreateImage("Accent", stickyRt, UIColors.BorderAccent, raycast: false);
+        UIFactory.ApplyWhiteSprite(accent);
+        var accentRt = accent.rectTransform;
+        accentRt.anchorMin = new Vector2(0f, 0f);
+        accentRt.anchorMax = new Vector2(1f, 0f);
+        accentRt.pivot = new Vector2(0.5f, 0f);
+        accentRt.sizeDelta = new Vector2(0f, UITheme.S(2f));
+        accentRt.anchoredPosition = Vector2.zero;
+
+        var stickyTmp = UIFactory.CreateTmp(
+            "Text",
+            stickyRt,
+            "",
+            UITheme.S(FontModTitleRef),
+            UIColors.TextPrimary,
+            TextAlignmentOptions.MidlineLeft);
+        stickyTmp.fontStyle = FontStyles.Bold;
+        stickyTmp.raycastTarget = false;
+        UIHelpers.SetFillParent(stickyTmp.rectTransform, UITheme.S(10f));
+
+        stickyImg.gameObject.SetActive(false);
+
+        var controller = scrollView.GameObject.AddComponent<StickyModTitleController>();
+        controller.Initialize(scrollView.ScrollRect, stickyRt, stickyTmp, headerH);
+
+        // Whole-bar click toggles the pinned mod (drag-pan safe).
+        var stickyClick = stickyImg.gameObject.AddComponent<ClickVsDragToggle>();
+        stickyClick.Initialize(
+            true,
+            ClickDragThresholdPx,
+            _ => controller.ToggleActiveMod());
+
+        return controller;
+    }
+
+    public static void RefreshMods() => RefreshMods(resetScroll: false, preserveSearchFocus: false);
+
+    /// <param name="resetScroll">Snap list to top after rebuild (sort/filter/search changes).</param>
+    /// <param name="preserveSearchFocus">Keep the search field focused after rebuild (live typing).</param>
+    public static void RefreshMods(bool resetScroll, bool preserveSearchFocus = false)
+    {
+        if (_window == null || _window.Content == null)
+            return;
+
+        // Don't steal focus from the search box while the user is typing.
+        if (preserveSearchFocus)
+        {
+            // Close dropdowns only; leave search caret alone.
+            for (int i = _openDropdowns.Count - 1; i >= 0; i--)
+            {
+                var dd = _openDropdowns[i];
+                if (dd != null)
+                    dd.CloseList();
+            }
+            _openDropdowns.Clear();
+        }
+        else
+        {
+            ClearActiveEditing();
+        }
+
+
+        _stickyTitles?.Clear();
+        _modBlocks.Clear();
+        UIHelpers.DestroyChildren(_window.Content);
+
+        // Fresh cfg scan once per refresh (used by filter, sort, and CreateModConfig).
+        _cfgFilesCache = null;
+        LoadCollapsedFromConfig();
+
         try
         {
-            var mods = ModManager.Mods;
-            if (mods == null) return;
-            foreach (var mod in mods)
+            var source = ModManager.Mods;
+            if (source == null)
             {
-                try
+                ShowEmptyState("No mods loaded");
+                _stickyTitles?.Refresh();
+                UpdateExpandCollapseAllLabel();
+                if (resetScroll)
+                    ResetScrollToTop();
+                return;
+            }
+
+            var visible = BuildVisibleMods(source);
+            if (visible.Count == 0)
+            {
+                ShowEmptyState("No mods match");
+                _stickyTitles?.Refresh();
+                UpdateExpandCollapseAllLabel();
+                if (resetScroll)
+                    ResetScrollToTop();
+                if (preserveSearchFocus)
+                    RestoreSearchFocus();
+                return;
+            }
+
+            bool groupByAuthor = SparrohPlugin.GroupModsByAuthor?.Value ?? false;
+            bool first = true;
+
+            if (groupByAuthor)
+
+            {
+                // Stable group order: sort groups A–Z, keep within-group order from visible.
+                var byGroup = new SortedDictionary<string, List<ModInfo>>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < visible.Count; i++)
                 {
-                    CreateModConfig(mod, _content.transform);
-                    GameObject separator = new GameObject("Separator", typeof(Image));
-                    separator.transform.SetParent(_content.transform, false);
-                    var sepImg = separator.GetComponent<Image>();
-                    sepImg.color = new Color(0.5f, 0.5f, 0.6f, 0.5f);
-                    var sepLayout = separator.AddComponent<LayoutElement>();
-                    sepLayout.preferredWidth = 760;
-                    sepLayout.preferredHeight = 3;
+                    string g = GetAuthorGroup(visible[i]);
+                    if (!byGroup.TryGetValue(g, out var bucket))
+                    {
+                        bucket = new List<ModInfo>();
+                        byGroup[g] = bucket;
+                    }
+                    bucket.Add(visible[i]);
                 }
-                catch (Exception e)
+
+                foreach (var kvp in byGroup)
                 {
-                    SparrohPlugin.Logger.LogError($"Error creating config for mod {mod.Name}: {e.Message}");
+                    if (!first)
+                        UISeparator.Create(_window.Content);
+                    first = false;
+
+                    CreateGroupHeader(_window.Content, kvp.Key);
+                    for (int i = 0; i < kvp.Value.Count; i++)
+                    {
+                        try
+                        {
+                            if (i > 0)
+                                UISeparator.Create(_window.Content);
+                            CreateModConfig(kvp.Value[i], _window.Content);
+                        }
+                        catch (Exception e)
+                        {
+                            SparrohPlugin.Logger.LogError(
+                                $"Error creating config for mod {kvp.Value[i].Name}: {e.Message}");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                foreach (var mod in visible)
+                {
+                    try
+                    {
+                        if (!first)
+                            UISeparator.Create(_window.Content);
+                        first = false;
+
+                        CreateModConfig(mod, _window.Content);
+                    }
+                    catch (Exception e)
+                    {
+                        SparrohPlugin.Logger.LogError($"Error creating config for mod {mod.Name}: {e.Message}");
+                    }
                 }
             }
         }
@@ -334,7 +1098,188 @@ public class ModConfigGUI : MonoBehaviour
         {
             SparrohPlugin.Logger.LogError($"Error refreshing mods list: {e.Message}");
         }
+
+        _stickyTitles?.Refresh();
+        UpdateExpandCollapseAllLabel();
+
+        if (resetScroll)
+            ResetScrollToTop();
+
+        if (preserveSearchFocus)
+            RestoreSearchFocus();
     }
+
+
+    private static void ShowEmptyState(string message)
+    {
+        var empty = UIText.Create(
+            _window.Content,
+            "EmptyState",
+            message,
+            UITheme.S(FontBodyRef),
+            UIColors.TextMuted,
+            TextAlignmentOptions.Center);
+        UIHelpers.EnsureLayoutElement(empty.GameObject,
+            preferredHeight: UITheme.S(48f),
+            minHeight: UITheme.S(48f));
+    }
+
+    private static void ResetScrollToTop()
+    {
+        if (_window?.ScrollView?.ScrollRect == null)
+            return;
+        var sr = _window.ScrollView.ScrollRect;
+        sr.velocity = Vector2.zero;
+        sr.verticalNormalizedPosition = 1f;
+    }
+
+    private static void RestoreSearchFocus()
+    {
+        if (_searchField?.Input == null)
+            return;
+        _activeInput = _searchField.Input;
+        _searchField.Input.ActivateInputField();
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(_searchField.Input.gameObject);
+    }
+
+    /// <summary>Filter → sort pipeline for the mod list.</summary>
+    private static List<ModInfo> BuildVisibleMods(IReadOnlyList<ModInfo> source)
+    {
+        string query = (_searchQuery ?? "").Trim();
+        bool hideEmpty = SparrohPlugin.HideModsWithoutConfig?.Value ?? true;
+        string filter = NormalizeFilter(SparrohPlugin.ModListFilter?.Value);
+        string sortMode = SparrohPlugin.ModSortMode?.Value ?? "Alphabetical";
+
+        var list = new List<ModInfo>(source.Count);
+        for (int i = 0; i < source.Count; i++)
+        {
+            var mod = source[i];
+
+            if (!ModMatchesSearch(mod, query))
+                continue;
+
+            if (filter == "Sandbox" && !mod.IsSandbox)
+                continue;
+            if (filter == "ClientSide" && !mod.IsClientSide)
+                continue;
+
+            if (hideEmpty && !ModHasConfig(mod))
+                continue;
+
+            list.Add(mod);
+        }
+
+        SortMods(list, sortMode);
+        return list;
+    }
+
+    private static bool ModMatchesSearch(ModInfo mod, string query)
+    {
+        if (string.IsNullOrEmpty(query))
+            return true;
+
+        if (!string.IsNullOrEmpty(mod.Name) &&
+            mod.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+
+        if (!string.IsNullOrEmpty(mod.GUID) &&
+            mod.GUID.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+
+        return false;
+    }
+
+    private static void SortMods(List<ModInfo> list, string mode)
+    {
+        if (list == null || list.Count <= 1)
+            return;
+
+        mode = mode ?? "Alphabetical";
+
+        if (string.Equals(mode, "LoadOrder", StringComparison.OrdinalIgnoreCase))
+            return; // already in ModManager / chainloader order after filter
+
+        if (string.Equals(mode, "AlphabeticalDesc", StringComparison.OrdinalIgnoreCase))
+        {
+            list.Sort((a, b) => string.Compare(b.Name, a.Name, StringComparison.OrdinalIgnoreCase));
+            return;
+        }
+
+        if (string.Equals(mode, "SandboxFirst", StringComparison.OrdinalIgnoreCase))
+        {
+            list.Sort((a, b) =>
+            {
+                int sandbox = b.IsSandbox.CompareTo(a.IsSandbox); // true first
+                if (sandbox != 0)
+                    return sandbox;
+                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
+            return;
+        }
+
+        if (string.Equals(mode, "HasConfigFirst", StringComparison.OrdinalIgnoreCase))
+        {
+            list.Sort((a, b) =>
+            {
+                bool ha = ModHasConfig(a);
+                bool hb = ModHasConfig(b);
+                int cfg = hb.CompareTo(ha); // has-config first
+                if (cfg != 0)
+                    return cfg;
+                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
+            return;
+        }
+
+        // Alphabetical (default)
+        list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string[] GetCfgFiles()
+    {
+        if (_cfgFilesCache != null)
+            return _cfgFilesCache;
+
+        try
+        {
+            if (Directory.Exists(Paths.ConfigPath))
+                _cfgFilesCache = Directory.GetFiles(Paths.ConfigPath, "*.cfg");
+            else
+                _cfgFilesCache = Array.Empty<string>();
+        }
+        catch (Exception e)
+        {
+            SparrohPlugin.Logger.LogWarning($"Could not enumerate config files: {e.Message}");
+            _cfgFilesCache = Array.Empty<string>();
+        }
+
+        return _cfgFilesCache;
+    }
+
+    /// <summary>Find a .cfg whose filename contains the mod display name (case-insensitive).</summary>
+    private static bool TryFindConfigPath(ModInfo mod, out string configPath)
+    {
+        configPath = null;
+        if (string.IsNullOrEmpty(mod.Name))
+            return false;
+
+        string nameLower = mod.Name.ToLowerInvariant();
+        foreach (string file in GetCfgFiles())
+        {
+            string fileName = Path.GetFileNameWithoutExtension(file);
+            if (fileName != null && fileName.ToLowerInvariant().Contains(nameLower))
+            {
+                configPath = file;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ModHasConfig(ModInfo mod) => TryFindConfigPath(mod, out _);
+
 
     private static Dictionary<string, List<(string entry, string[] options)>> ParseModConfig(string configPath)
     {
@@ -372,7 +1317,8 @@ public class ModConfigGUI : MonoBehaviour
                     {
                         if (comment.StartsWith("Acceptable values:"))
                         {
-                            options = comment.Substring("Acceptable values:".Length).Split(',').Select(s => s.Trim())
+                            options = comment.Substring("Acceptable values:".Length).Split(',')
+                                .Select(s => s.Trim())
                                 .ToArray();
                             break;
                         }
@@ -397,55 +1343,131 @@ public class ModConfigGUI : MonoBehaviour
         try
         {
             ModInfo modLocal = mod;
-            GameObject titleObj = new GameObject(modLocal.Name + " Title", typeof(Image));
-            titleObj.transform.SetParent(parent, false);
-            var titleImg = titleObj.GetComponent<Image>();
-            titleImg.color = new Color(0.6f, 0.6f, 0.7f, 1f);
-            var titleLayout = titleObj.AddComponent<LayoutElement>();
-            titleLayout.preferredWidth = 760;
-            titleLayout.minHeight = 40;
+            string modKey = GetModKey(modLocal);
+            bool expanded = IsModExpanded(modKey);
 
-            GameObject titleTextObj = new GameObject("Text", typeof(Text));
-            titleTextObj.transform.SetParent(titleObj.transform, false);
-            var titleTextRect = titleTextObj.GetComponent<RectTransform>();
-            titleTextRect.anchorMin = Vector2.zero;
-            titleTextRect.anchorMax = Vector2.one;
-            titleTextRect.offsetMin = Vector2.zero;
-            titleTextRect.offsetMax = Vector2.zero;
-            var titleText = titleTextObj.GetComponent<Text>();
-            titleText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-            titleText.text = $"<b>{modLocal.Name}</b>";
+            // ── Mod block: title + collapsible body ───────────────────────
+            var blockRoot = UIFactory.CreateRect("ModBlock_" + modLocal.Name, parent);
+            UIFactory.AddVerticalLayout(
+                blockRoot.gameObject,
+                UITheme.S(UITheme.SpacingTight),
+                new RectOffset(0, 0, 0, 0),
+                TextAnchor.UpperLeft,
+                controlChildHeight: true,
+                expandHeight: false,
+                controlChildWidth: true,
+                expandWidth: true);
+            // Let content size the block.
+            UIFactory.AddContentSizeFitter(blockRoot.gameObject,
+                ContentSizeFitter.FitMode.Unconstrained,
+                ContentSizeFitter.FitMode.PreferredSize);
+
+            // Title bar (clickable)
+            var titleBar = UIFactory.CreateImage(modLocal.Name + " Title", blockRoot, UIColors.TitleBar, raycast: true);
+            UIFactory.ApplyWhiteSprite(titleBar);
+            UIHelpers.EnsureLayoutElement(titleBar.gameObject,
+                preferredHeight: UITheme.S(44f),
+                minHeight: UITheme.S(44f));
+
+            UIFactory.AddHorizontalLayout(
+                titleBar.gameObject,
+                UITheme.S(6f),
+                UITheme.ScaledPadding(10, 10, 4, 4),
+                TextAnchor.MiddleLeft,
+                controlChildWidth: true,
+                expandWidth: false,
+                controlChildHeight: true,
+                expandHeight: true);
+
+            var chevronTmp = UIFactory.CreateTmp(
+                "Chevron",
+                titleBar.rectTransform,
+                expanded ? "-" : "+",
+
+                UITheme.S(FontModTitleRef),
+                UIColors.TextSecondary,
+                TextAlignmentOptions.Center);
+            chevronTmp.fontStyle = FontStyles.Bold;
+            chevronTmp.raycastTarget = false;
+            var chevLe = UIHelpers.EnsureLayoutElement(chevronTmp.gameObject,
+                preferredWidth: UITheme.S(28f),
+                preferredHeight: UITheme.S(36f));
+            chevLe.flexibleWidth = 0f;
+
+            string title = RichText.Bold(modLocal.Name);
             if (modLocal.IsSandbox)
-                titleText.text += $" <size=50%>[<i><color=#FF0000>Sandbox</color></i>]</size>";
-            titleText.fontSize = 22;
-            titleText.color = new Color(0.1f, 0.1f, 0.1f, 1f);
-            titleText.alignment = TextAnchor.MiddleCenter;
-
-            string[] cfgFiles = Directory.GetFiles(Paths.ConfigPath, "*.cfg");
-            string configPath = null;
-            foreach (string file in cfgFiles)
             {
-                string fileName = Path.GetFileNameWithoutExtension(file);
-                if (fileName.ToLower().Contains(modLocal.Name.ToLower()))
-                {
-                    configPath = file;
-                    break;
-                }
+                title += " " + RichText.Size(
+                    "[" + RichText.Italic(RichText.Colorize("Sandbox", UIColors.Rose)) + "]",
+                    55);
             }
 
-            if (configPath == null || !File.Exists(configPath))
+            var titleTmp = UIFactory.CreateTmp(
+                "Text",
+                titleBar.rectTransform,
+                title,
+                UITheme.S(FontModTitleRef),
+                UIColors.TextPrimary,
+                TextAlignmentOptions.MidlineLeft);
+            titleTmp.fontStyle = FontStyles.Bold;
+            titleTmp.raycastTarget = false;
+            var titleLe = UIHelpers.EnsureLayoutElement(titleTmp.gameObject,
+                preferredHeight: UITheme.S(36f));
+            titleLe.flexibleWidth = 1f;
+
+            // Body holds sections / no-config message
+            var bodyRt = UIFactory.CreateRect("Body", blockRoot);
+            UIFactory.AddVerticalLayout(
+                bodyRt.gameObject,
+                UITheme.S(UITheme.SpacingTight),
+                new RectOffset(0, 0, 0, 0),
+                TextAnchor.UpperLeft,
+                controlChildHeight: true,
+                expandHeight: false,
+                controlChildWidth: true,
+                expandWidth: true);
+            UIFactory.AddContentSizeFitter(bodyRt.gameObject,
+                ContentSizeFitter.FitMode.Unconstrained,
+                ContentSizeFitter.FitMode.PreferredSize);
+            bodyRt.gameObject.SetActive(expanded);
+
+            var blockState = new ModBlockState
             {
-                GameObject noConfigObj = new GameObject("NoConfig", typeof(Text));
-                noConfigObj.transform.SetParent(parent, false);
-                var noConfigText = noConfigObj.GetComponent<Text>();
-                noConfigText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                noConfigText.text = "(No config found)";
-                noConfigText.fontSize = 18;
-                noConfigText.color = Color.gray;
-                noConfigText.alignment = TextAnchor.MiddleCenter;
-                var layoutElem = noConfigObj.AddComponent<LayoutElement>();
-                layoutElem.preferredWidth = 760;
-                layoutElem.preferredHeight = 28;
+                Key = modKey,
+                Body = bodyRt.gameObject,
+                Chevron = chevronTmp,
+                TitleRect = titleBar.rectTransform,
+                TitleRichText = title,
+                IsExpanded = expanded
+            };
+            _modBlocks.Add(blockState);
+
+            // Sticky shows chevron + name so collapsed state is visible while pinned.
+            _stickyTitles?.Register(titleBar.rectTransform, FormatStickyTitle(blockState), modKey);
+
+            // Click title to toggle (drag-pan safe) — same path as sticky header.
+            var titleClick = titleBar.gameObject.AddComponent<ClickVsDragToggle>();
+            titleClick.Initialize(
+                expanded,
+                ClickDragThresholdPx,
+                _ => ToggleModBlock(blockState));
+
+            Transform bodyParent = bodyRt;
+
+
+            // ── Locate config file ─────────────────────────────────────────
+            if (!TryFindConfigPath(modLocal, out string configPath) || !File.Exists(configPath))
+            {
+                var noConfig = UIText.Create(
+                    bodyParent,
+                    "NoConfig",
+                    "(No config found)",
+                    UITheme.S(FontBodyRef),
+                    UIColors.TextMuted,
+                    TextAlignmentOptions.Center);
+                UIHelpers.EnsureLayoutElement(noConfig.GameObject,
+                    preferredHeight: UITheme.S(28f),
+                    minHeight: UITheme.S(28f));
                 return;
             }
 
@@ -467,37 +1489,25 @@ public class ModConfigGUI : MonoBehaviour
 
             foreach (var section in ParseModConfig(configPath))
             {
-                GameObject sectionLabel = new GameObject($"Section: {section.Key}", typeof(Image));
-                sectionLabel.transform.SetParent(parent, false);
-                var sectionImg = sectionLabel.GetComponent<Image>();
-                sectionImg.color = new Color(0.3f, 0.4f, 0.5f, 1f);
-                sectionLabel.GetComponent<RectTransform>().sizeDelta = new Vector2(760, -1);
-                var layoutElem = sectionLabel.AddComponent<LayoutElement>();
-                layoutElem.preferredWidth = 760;
-                layoutElem.minHeight = 35;
+                // Section header
+                var sectionLabel = UIWindow.CreateSectionHeader(bodyParent, section.Key);
 
-                GameObject sectionTextObj = new GameObject("Text", typeof(Text));
-                sectionTextObj.transform.SetParent(sectionLabel.transform, false);
-                var sectionTextRect = sectionTextObj.GetComponent<RectTransform>();
-                sectionTextRect.anchorMin = Vector2.zero;
-                sectionTextRect.anchorMax = Vector2.one;
-                sectionTextRect.offsetMin = Vector2.zero;
-                sectionTextRect.offsetMax = Vector2.zero;
-                var sectionText = sectionTextObj.GetComponent<Text>();
-                sectionText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                sectionText.text = section.Key;
-                sectionText.fontSize = 20;
-                sectionText.color = Color.white;
-                sectionText.alignment = TextAnchor.MiddleCenter;
+                if (sectionLabel?.Tmp != null)
+                {
+                    sectionLabel.Tmp.fontSize = UITheme.S(FontSectionRef);
+                    sectionLabel.Tmp.fontStyle = FontStyles.Bold;
+                }
 
                 foreach (var (fullEntry, _) in section.Value)
                 {
                     string key = fullEntry.Substring(0, fullEntry.IndexOf('=')).Trim();
                     string value = fullEntry.Substring(fullEntry.IndexOf('=') + 1).Trim();
                     var configEntry = configFile.Bind(section.Key.Trim('[', ']'), key, value);
+
                     string[] options = null;
                     string cacheKey = section.Key.Trim('[', ']') + "." + key;
-                    if (_cachedOptions.ContainsKey(configPath) && _cachedOptions[configPath].ContainsKey(cacheKey))
+                    if (_cachedOptions.ContainsKey(configPath) &&
+                        _cachedOptions[configPath].ContainsKey(cacheKey))
                     {
                         options = _cachedOptions[configPath][cacheKey];
                     }
@@ -505,223 +1515,196 @@ public class ModConfigGUI : MonoBehaviour
                     string rawEntryValue = configEntry.Value ?? "";
                     Type entryType = typeof(string);
 
-                    if (bool.TryParse(rawEntryValue, out var _))
+                    if (bool.TryParse(rawEntryValue, out _))
                         entryType = typeof(bool);
-                    else if (int.TryParse(rawEntryValue, out var _))
+                    else if (int.TryParse(rawEntryValue, out _))
                         entryType = typeof(int);
-                    else if (float.TryParse(rawEntryValue, out var _))
+                    else if (float.TryParse(rawEntryValue, out _))
                         entryType = typeof(float);
 
-                    GameObject entryObj = new GameObject("Entry " + key);
-                    entryObj.transform.SetParent(parent, false);
-                    var entryImg = entryObj.AddComponent<Image>();
-                    entryImg.color = new Color(0.2f, 0.2f, 0.25f, 0.8f);
-                    var entryLayout = entryObj.AddComponent<LayoutElement>();
-                    entryLayout.preferredWidth = 760;
-                    entryLayout.minHeight = 55;
+                    // Entry row: dark surface with label + control
+                    float rowH = UITheme.S(58f);
+                    var entryBg = UIFactory.CreateImage("Entry_" + key, bodyParent, UIColors.EntryBg, raycast: true);
 
-                    GameObject labelObj = new GameObject("Label", typeof(Text));
-                    labelObj.transform.SetParent(entryObj.transform, false);
-                    var labelText = labelObj.GetComponent<Text>();
-                    labelText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                    labelText.text = key;
-                    labelText.fontSize = 16;
-                    labelText.color = Color.white;
-                    labelText.alignment = TextAnchor.MiddleCenter;
-                    var labelRect = labelObj.GetComponent<RectTransform>();
-                    labelRect.anchorMin = new Vector2(0, 0.5f);
-                    labelRect.anchorMax = new Vector2(0.4f, 0.5f);
+                    UIFactory.ApplyWhiteSprite(entryBg);
+                    UIHelpers.EnsureLayoutElement(entryBg.gameObject,
+                        preferredHeight: rowH,
+                        minHeight: rowH);
 
-                    GameObject valueObj = new GameObject("Value", typeof(RectTransform));
-                    valueObj.transform.SetParent(entryObj.transform, false);
-                    var valueRect = valueObj.GetComponent<RectTransform>();
-                    valueRect.anchorMin = new Vector2(0.45f, 0);
-                    valueRect.anchorMax = new Vector2(1, 1);
-                    valueRect.sizeDelta = new Vector2(-10, 0);
+                    // controlChildWidth must be true or flexibleWidth is ignored (content-sized kids).
+                    UIFactory.AddHorizontalLayout(
+                        entryBg.gameObject,
+                        UITheme.S(UITheme.SpacingNormal),
+                        UITheme.ScaledPadding(12, 12, 6, 6),
+                        TextAnchor.MiddleLeft,
+                        controlChildWidth: true,
+                        expandWidth: true,
+                        controlChildHeight: true,
+                        expandHeight: true);
+
+                    // Label | value — equal halves of the row.
+                    var labelTmp = UIFactory.CreateTmp(
+                        "Label",
+                        entryBg.rectTransform,
+                        key,
+                        UITheme.S(FontLabelRef),
+                        UIColors.TextPrimary,
+                        TextAlignmentOptions.MidlineLeft,
+                        wrap: true);
+                    labelTmp.fontStyle = FontStyles.Bold;
+                    var labelLe = UIHelpers.EnsureLayoutElement(labelTmp.gameObject,
+                        preferredWidth: UITheme.S(200f),
+                        preferredHeight: rowH - UITheme.S(12f));
+                    labelLe.flexibleWidth = 1f;
+                    labelLe.minWidth = 0f;
+                    labelLe.preferredWidth = -1f; // let flex share decide width
+
+                    var valueRt = UIFactory.CreateRect("Value", entryBg.rectTransform);
+                    var valueLe = UIHelpers.EnsureLayoutElement(valueRt.gameObject,
+                        preferredWidth: UITheme.S(200f),
+                        preferredHeight: UITheme.S(36f),
+                        minHeight: UITheme.S(32f));
+                    valueLe.flexibleWidth = 1f;
+                    valueLe.minWidth = 0f;
+                    valueLe.preferredWidth = -1f;
+
+
+
 
                     if (entryType == typeof(bool))
                     {
-                        valueObj.transform.localScale = new Vector3(0.7f, 0.7f, 0.7f);
+                        bool isOn = rawEntryValue.Equals("true", StringComparison.OrdinalIgnoreCase);
 
-                        // Display-only status; click-vs-drag gate prevents pan from flipping values.
-                        var statusText = new GameObject("Status", typeof(Text));
-                        statusText.transform.SetParent(valueObj.transform, false);
-                        var statusComp = statusText.GetComponent<Text>();
-                        bool isOn = rawEntryValue.ToLower() == "true";
-                        statusComp.text = isOn ? "ON" : "OFF";
-                        statusComp.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                        statusComp.fontSize = 16;
-                        statusComp.color = isOn ? Color.green : Color.red;
-                        statusComp.alignment = TextAnchor.MiddleCenter;
-                        var statusRect = statusText.GetComponent<RectTransform>();
-                        statusRect.anchorMin = Vector2.zero;
-                        statusRect.anchorMax = Vector2.one;
-                        statusRect.offsetMin = Vector2.zero;
-                        statusRect.offsetMax = Vector2.zero;
+                        // Status text (ON/OFF) — click-vs-drag gated so pan doesn't flip.
+                        var statusTmp = UIFactory.CreateTmp(
+                            "Status",
+                            valueRt,
+                            isOn ? "ON" : "OFF",
+                            UITheme.S(FontLabelRef),
+                            isOn ? UIColors.Success : UIColors.Error,
+                            TextAlignmentOptions.Center);
+                        statusTmp.fontStyle = FontStyles.Bold;
+                        UIHelpers.SetFillParent(statusTmp.rectTransform);
 
-                        var toggleImg = valueObj.AddComponent<Image>();
-                        toggleImg.color = new Color(0.7f, 0.7f, 0.8f, 0.9f);
-                        // Raycast target so clicks hit this control
+                        var toggleImg = valueRt.gameObject.AddComponent<Image>();
+                        UIFactory.ApplyWhiteSprite(toggleImg);
+                        toggleImg.color = isOn ? UIColors.ToggleOn : UIColors.ToggleOff;
                         toggleImg.raycastTarget = true;
 
-                        var clickToggle = valueObj.AddComponent<ClickVsDragToggle>();
-                        clickToggle.Initialize(
+                        var entryToggle = valueRt.gameObject.AddComponent<ClickVsDragToggle>();
+                        entryToggle.Initialize(
                             isOn,
                             ClickDragThresholdPx,
                             val =>
                             {
                                 configEntry.Value = val ? "True" : "False";
                                 configEntry.ConfigFile.Save();
-                                statusComp.text = val ? "ON" : "OFF";
-                                statusComp.color = val ? Color.green : Color.red;
+                                statusTmp.text = val ? "ON" : "OFF";
+                                statusTmp.color = val ? UIColors.Success : UIColors.Error;
+                                toggleImg.color = val ? UIColors.ToggleOn : UIColors.ToggleOff;
                             });
+
                     }
-                    else if (options != null)
+                    else if (options != null && options.Length > 0)
                     {
-                        var mainButton = valueObj.AddComponent<Button>();
-                        mainButton.targetGraphic = valueObj.AddComponent<Image>();
-                        mainButton.targetGraphic.color = new Color(0.8f, 0.8f, 0.9f, 0.9f);
-                        var mainTextObj = new GameObject("MainText", typeof(Text));
-                        mainTextObj.transform.SetParent(valueObj.transform, false);
-                        var mainTextRect = mainTextObj.GetComponent<RectTransform>();
-                        mainTextRect.anchorMin = Vector2.zero;
-                        mainTextRect.anchorMax = Vector2.one;
-                        mainTextRect.offsetMin = Vector2.zero;
-                        mainTextRect.offsetMax = Vector2.zero;
-                        var mainText = mainTextObj.GetComponent<Text>();
-                        mainText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                        mainText.fontSize = 16;
-                        mainText.color = Color.black;
-                        mainText.alignment = TextAnchor.MiddleCenter;
-                        mainText.text = value;
+                        int initial = Array.FindIndex(options,
+                            o => string.Equals(o, value, StringComparison.OrdinalIgnoreCase));
+                        if (initial < 0)
+                            initial = 0;
 
-                        var listObj = new GameObject("List", typeof(Image));
-                        listObj.transform.SetParent(_modWindow.transform.parent, false);
-                        var listRect = listObj.GetComponent<RectTransform>();
-                        listRect.anchorMin = new Vector2(0.5f, 0.5f);
-                        listRect.anchorMax = new Vector2(0.5f, 0.5f);
-                        listRect.pivot = new Vector2(0.5f, 1);
-                        listRect.sizeDelta = new Vector2(200, 30 * options.Length);
-                        listRect.anchoredPosition = new Vector2(0, 0);
-                        var listImg = listObj.GetComponent<Image>();
-                        listImg.color = new Color(0.9f, 0.9f, 0.95f, 1f);
-                        var listCanvas = listObj.AddComponent<Canvas>();
-                        listCanvas.sortingOrder = 200;
-                        listObj.AddComponent<GraphicRaycaster>();
-                        listObj.SetActive(false);
+                        // Build dropdown without the default main-button toggle so we can
+                        // clear other edits first, then open/close explicitly.
+                        var dropdown = UIDropdown.Create(
+                            valueRt,
+                            options,
+                            initial,
+                            onChanged: null,
+                            "Dropdown_" + key);
 
-                        for (int i = 0; i < options.Length; i++)
+                        dropdown.OnChanged((idx, selected) =>
                         {
-                            var opt = options[i];
-                            var optionObj = new GameObject("Option " + i, typeof(Button), typeof(Image));
-                            optionObj.transform.SetParent(listObj.transform, false);
-                            var optionRect = optionObj.GetComponent<RectTransform>();
-                            optionRect.anchorMin = new Vector2(0, 1);
-                            optionRect.anchorMax = new Vector2(1, 1);
-                            optionRect.pivot = new Vector2(0.5f, 1);
-                            optionRect.sizeDelta = new Vector2(0, 30);
-                            optionRect.anchoredPosition = new Vector2(0, -i * 30);
-                            var optionImg = optionObj.GetComponent<Image>();
-                            optionImg.color = new Color(0.8f, 0.8f, 0.9f, 1f);
-                            var optionButton = optionObj.GetComponent<Button>();
-                            optionButton.targetGraphic = optionImg;
-                            var optionTextObj = new GameObject("Text", typeof(Text));
-                            optionTextObj.transform.SetParent(optionObj.transform, false);
-                            var optionTextRect = optionTextObj.GetComponent<RectTransform>();
-                            optionTextRect.anchorMin = new Vector2(0, 0);
-                            optionTextRect.anchorMax = new Vector2(1, 1);
-                            optionTextRect.offsetMin = new Vector2(20, 0);
-                            optionTextRect.offsetMax = new Vector2(-4, 0);
-                            var optionText = optionTextObj.GetComponent<Text>();
-                            optionText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                            optionText.fontSize = 14;
-                            optionText.color = Color.black;
-                            optionText.alignment = TextAnchor.MiddleLeft;
-                            optionText.text = opt;
-                            int index = i;
-                            optionButton.onClick.AddListener(() =>
+                            configEntry.Value = selected;
+                            configEntry.ConfigFile.Save();
+                            UnregisterDropdown(dropdown);
+                        });
+
+                        UIHelpers.SetFillParent(dropdown.Rect);
+
+                        var mainBtn = dropdown.GameObject.GetComponentInChildren<Button>();
+                        if (mainBtn != null)
+                        {
+                            mainBtn.onClick.RemoveAllListeners();
+                            mainBtn.onClick.AddListener(() =>
                             {
-                                configEntry.Value = options[index];
-                                configEntry.ConfigFile.Save();
-                                mainText.text = options[index];
-                                listObj.SetActive(false);
-                                UnregisterDropdown(listObj);
+                                var list = dropdown.GameObject.transform.Find("List");
+                                bool wasOpen = list != null && list.gameObject.activeSelf;
+
+                                ClearActiveEditing();
+
+                                if (!wasOpen)
+                                {
+                                    dropdown.OpenList();
+                                    RegisterOpenDropdown(dropdown);
+                                }
                             });
                         }
 
-                        mainButton.onClick.AddListener(() =>
+                        if (dropdown.Label != null)
                         {
-                            // Explicit click opens/closes; close others first
-                            bool opening = !listObj.activeSelf;
-                            ClearActiveEditing();
-
-                            if (opening)
-                            {
-                                Vector3[] corners = new Vector3[4];
-                                valueObj.GetComponent<RectTransform>().GetWorldCorners(corners);
-                                Vector3 center = (corners[0] + corners[2]) / 2;
-                                Vector2 localPoint;
-                                RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                                    _modWindow.transform.parent.GetComponent<RectTransform>(), center, null,
-                                    out localPoint);
-                                listRect.anchoredPosition = localPoint + new Vector2(0,
-                                    -valueObj.GetComponent<RectTransform>().rect.height / 2 - 5);
-                                listObj.SetActive(true);
-                                RegisterOpenDropdown(listObj);
-                            }
-                        });
+                            dropdown.Label.fontSize = UITheme.S(FontBodyRef);
+                            dropdown.Label.fontStyle = FontStyles.Bold;
+                        }
                     }
                     else
                     {
-                        var input = valueObj.AddComponent<InputField>();
-                        input.text = value;
-                        // Start non-interactive: user must click to arm the field for editing.
-                        input.interactable = false;
-
                         string sectionName = section.Key.Trim('[', ']');
                         bool isConfigToggleKey = sectionName == "Keybinds" && key == "ToggleModConfigGUI";
                         bool isRepositionKey = sectionName == "Keybinds" && key == "ToggleHudReposition";
 
-                        var inputImg = valueObj.AddComponent<Image>();
-                        inputImg.color = new Color(0.8f, 0.8f, 0.9f, 0.9f);
-                        inputImg.raycastTarget = true;
-                        var textChild = new GameObject("Text", typeof(Text));
-                        textChild.transform.SetParent(valueObj.transform, false);
-                        var textChildRect = textChild.GetComponent<RectTransform>();
-                        textChildRect.anchorMin = new Vector2(0.5f, 0.5f);
-                        textChildRect.anchorMax = new Vector2(0.5f, 0.5f);
-                        textChildRect.anchoredPosition = Vector2.zero;
-                        textChildRect.pivot = new Vector2(0.5f, 0.5f);
-                        textChildRect.sizeDelta = new Vector2(300, 30);
-                        input.textComponent = textChild.GetComponent<Text>();
-                        input.textComponent.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-                        input.textComponent.fontSize = 16;
-                        input.textComponent.color = Color.black;
-                        input.textComponent.alignment = TextAnchor.MiddleCenter;
-                        input.targetGraphic = inputImg;
+                        var field = UIInputField.Create(
+                            valueRt,
+                            value,
+                            "",
+                            name: "Input_" + key);
+                        UIHelpers.SetFillParent(field.Rect);
+
+                        // Darker input already from theme; enlarge + bold text.
+                        if (field.TextComponent != null)
+                        {
+                            field.TextComponent.fontSize = UITheme.S(FontBodyRef);
+                            field.TextComponent.fontStyle = FontStyles.Bold;
+                            field.TextComponent.color = UIColors.InputText;
+                            field.TextComponent.alignment = TextAlignmentOptions.Center;
+                        }
+
+                        if (field.Placeholder != null)
+                            field.Placeholder.alignment = TextAlignmentOptions.Center;
+
+                        field.Input.pointSize = UITheme.S(FontBodyRef);
 
                         if (isConfigToggleKey || isRepositionKey)
                         {
-                            var eventTrigger = input.gameObject.AddComponent<EventTrigger>();
-                            var triggerEntry = new EventTrigger.Entry();
-                            triggerEntry.eventID = EventTriggerType.PointerClick;
+                            // Key rebind: click arms capture mode.
+                            field.Input.interactable = false;
+                            var eventTrigger = field.GameObject.AddComponent<EventTrigger>();
+                            var triggerEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerClick };
                             bool bindConfig = isConfigToggleKey;
-                            triggerEntry.callback.AddListener((data) =>
+                            triggerEntry.callback.AddListener(_ =>
                             {
                                 if (!SparrohPlugin.IsRebinding && !SparrohPlugin.IsRebindingReposition)
                                 {
                                     ClearActiveEditing();
-                                    input.interactable = false;
-                                    input.text = "Press new key...";
+                                    field.Input.interactable = false;
+                                    field.Input.text = "Press new key...";
                                     if (bindConfig)
                                     {
                                         SparrohPlugin.IsRebinding = true;
-                                        KeyBindInput = input;
+                                        KeyBindInput = field.Input;
                                     }
                                     else
                                     {
                                         SparrohPlugin.IsRebindingReposition = true;
-                                        RepositionKeyBindInput = input;
+                                        RepositionKeyBindInput = field.Input;
                                     }
                                 }
                             });
@@ -729,16 +1712,17 @@ public class ModConfigGUI : MonoBehaviour
                         }
                         else
                         {
-                            // Select-to-edit: first click arms the field; save on end edit.
-                            var armClick = valueObj.AddComponent<SelectToEditInput>();
-                            armClick.Initialize(input, ClickDragThresholdPx, () => ActivateInput(input));
+                            // Select-to-edit: first clean click arms the field; save on end edit.
+                            field.Input.interactable = false;
+                            var armClick = field.GameObject.AddComponent<SelectToEditInput>();
+                            armClick.Initialize(field.Input, ClickDragThresholdPx, () => ActivateInput(field.Input));
 
-                            input.onEndEdit.AddListener(newVal =>
+                            field.Input.onEndEdit.AddListener(newVal =>
                             {
                                 configEntry.Value = newVal;
                                 configEntry.ConfigFile.Save();
-                                input.interactable = false;
-                                if (_activeInput == input)
+                                field.Input.interactable = false;
+                                if (_activeInput == field.Input)
                                     _activeInput = null;
                                 if (EventSystem.current != null)
                                     EventSystem.current.SetSelectedGameObject(null);
@@ -756,18 +1740,341 @@ public class ModConfigGUI : MonoBehaviour
 }
 
 /// <summary>
-/// ScrollRect wheel handler: each discrete wheel notch moves content by one item step.
+/// Pins the active mod's title to the top of the config scroll viewport while its
+/// settings are in view. The next mod title pushes the sticky bar off (iOS-style).
+/// </summary>
+public class StickyModTitleController : MonoBehaviour
+{
+    private struct ModTitleEntry
+    {
+        public RectTransform TitleRect;
+        public string TitleRichText;
+        public string ModKey;
+        public CanvasGroup CanvasGroup;
+    }
+
+    private ScrollRect _scrollRect;
+    private RectTransform _viewport;
+    private RectTransform _stickyRoot;
+    private TextMeshProUGUI _stickyLabel;
+    private float _headerHeight;
+    private readonly List<ModTitleEntry> _entries = new List<ModTitleEntry>();
+    private readonly Vector3[] _corners = new Vector3[4];
+    private bool _visible;
+    private string _currentTitle;
+    private int _hiddenTitleIndex = -1;
+    private int _activeIndex = -1;
+
+    /// <summary>True while the floating sticky title is shown.</summary>
+    public bool IsStickyActive => _visible;
+
+    /// <summary>
+    /// Pixels from the viewport top to the bottom edge of the sticky bar (0 when hidden).
+    /// Wheel snap aligns rows to this line so nothing rests half-under the header.
+    /// </summary>
+    public float SnapTopInset
+    {
+        get
+        {
+            if (!_visible || _stickyRoot == null || !_stickyRoot.gameObject.activeSelf)
+                return 0f;
+
+            // During push-off, stickyY > 0 slides the bar up; visible height shrinks.
+            float pushed = Mathf.Max(0f, _stickyRoot.anchoredPosition.y);
+            return Mathf.Clamp(_headerHeight - pushed, 0f, _headerHeight);
+        }
+    }
+
+    public void Initialize(
+        ScrollRect scrollRect,
+        RectTransform stickyRoot,
+        TextMeshProUGUI stickyLabel,
+        float headerHeight)
+    {
+        _scrollRect = scrollRect;
+        _viewport = scrollRect != null ? scrollRect.viewport : null;
+        _stickyRoot = stickyRoot;
+        _stickyLabel = stickyLabel;
+        _headerHeight = Mathf.Max(1f, headerHeight);
+
+        if (_scrollRect != null)
+            _scrollRect.onValueChanged.AddListener(OnScrollChanged);
+
+        SetStickyVisible(false);
+    }
+
+    private void OnDestroy()
+    {
+        if (_scrollRect != null)
+            _scrollRect.onValueChanged.RemoveListener(OnScrollChanged);
+
+        RestoreHiddenTitle();
+    }
+
+    public void Clear()
+    {
+        RestoreHiddenTitle();
+        _entries.Clear();
+        _currentTitle = null;
+        _activeIndex = -1;
+        SetStickyVisible(false);
+    }
+
+    public void Register(RectTransform titleRect, string titleRichText, string modKey = null)
+    {
+        if (titleRect == null)
+            return;
+
+        var cg = titleRect.GetComponent<CanvasGroup>();
+        if (cg == null)
+            cg = titleRect.gameObject.AddComponent<CanvasGroup>();
+        // Keep raycasts on so title click can collapse/expand; only disable while sticky-hidden.
+        cg.alpha = 1f;
+        cg.blocksRaycasts = true;
+        cg.interactable = true;
+
+        _entries.Add(new ModTitleEntry
+        {
+            TitleRect = titleRect,
+            TitleRichText = titleRichText ?? string.Empty,
+            ModKey = modKey ?? string.Empty,
+            CanvasGroup = cg
+        });
+    }
+
+    /// <summary>Collapse/expand the mod currently represented by the sticky bar.</summary>
+    public void ToggleActiveMod()
+    {
+        if (!_visible || _activeIndex < 0 || _activeIndex >= _entries.Count)
+            return;
+
+        string key = _entries[_activeIndex].ModKey;
+        if (string.IsNullOrEmpty(key))
+            return;
+
+        ModConfigGUI.ToggleModBlockByKey(key);
+    }
+
+    /// <summary>Update sticky label text for a registered title (e.g. chevron after collapse).</summary>
+    public void UpdateTitle(RectTransform titleRect, string titleRichText)
+    {
+        if (titleRect == null)
+            return;
+
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            if (_entries[i].TitleRect != titleRect)
+                continue;
+
+            var e = _entries[i];
+            e.TitleRichText = titleRichText ?? string.Empty;
+            _entries[i] = e;
+
+            // If this title is the active sticky, update the floater immediately.
+            if (_visible && _activeIndex == i && _stickyLabel != null)
+            {
+                _stickyLabel.text = e.TitleRichText;
+                _currentTitle = e.TitleRichText;
+            }
+            else if (_hiddenTitleIndex == i)
+            {
+                // Force sticky label refresh on next UpdateSticky.
+                _currentTitle = null;
+            }
+
+            return;
+        }
+    }
+
+
+    /// <summary>Rebuild layout then recompute sticky state (call after RefreshMods).</summary>
+    public void Refresh()
+    {
+        if (_scrollRect != null && _scrollRect.content != null)
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+
+        Canvas.ForceUpdateCanvases();
+        UpdateSticky();
+    }
+
+    private void OnScrollChanged(Vector2 _)
+    {
+        UpdateSticky();
+    }
+
+    private void LateUpdate()
+    {
+        // Keep in sync during inertial coasting and layout settles.
+        if (_entries.Count > 0 && _scrollRect != null && isActiveAndEnabled)
+            UpdateSticky();
+    }
+
+    private void UpdateSticky()
+    {
+        if (_stickyRoot == null || _viewport == null || _entries.Count == 0)
+        {
+            RestoreHiddenTitle();
+            _activeIndex = -1;
+            SetStickyVisible(false);
+            return;
+        }
+
+        // Last header whose top edge has reached/passed the viewport top becomes sticky.
+        int activeIndex = -1;
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            var titleRt = _entries[i].TitleRect;
+            if (titleRt == null)
+                continue;
+
+            float topDist = DistanceBelowViewportTop(titleRt);
+            if (topDist <= 0.5f)
+                activeIndex = i;
+            else if (activeIndex >= 0)
+                break;
+        }
+
+        if (activeIndex < 0)
+        {
+            RestoreHiddenTitle();
+            _activeIndex = -1;
+            SetStickyVisible(false);
+            return;
+        }
+
+        // Push-off: top-stretch sticky uses positive Y to move UP (out of viewport).
+        // When the next mod title enters the sticky zone, slide the floater up with it.
+        float stickyY = 0f;
+        if (activeIndex + 1 < _entries.Count)
+        {
+            var nextRt = _entries[activeIndex + 1].TitleRect;
+            if (nextRt != null)
+            {
+                float nextTop = DistanceBelowViewportTop(nextRt);
+                if (nextTop < _headerHeight)
+                    stickyY = _headerHeight - nextTop;
+            }
+        }
+
+        // Fully pushed off — next title owns the top; hide floater until activeIndex advances.
+        if (stickyY >= _headerHeight - 0.5f)
+        {
+            RestoreHiddenTitle();
+            _activeIndex = -1;
+            SetStickyVisible(false);
+            return;
+        }
+
+        _activeIndex = activeIndex;
+
+        string title = _entries[activeIndex].TitleRichText;
+        if (!string.Equals(_currentTitle, title, StringComparison.Ordinal))
+        {
+            _currentTitle = title;
+            if (_stickyLabel != null)
+                _stickyLabel.text = title;
+        }
+
+        _stickyRoot.anchoredPosition = new Vector2(_stickyRoot.anchoredPosition.x, stickyY);
+        SetStickyVisible(true);
+
+        // Hide the in-list title while the floater represents it (avoids double/clipped headers).
+        SetHiddenTitle(activeIndex);
+    }
+
+    /// <summary>
+    /// Distance from the viewport's top edge down to the title's top edge, in viewport local units.
+    /// 0 = flush with top; positive = still below (visible lower); negative = scrolled above.
+    /// </summary>
+    private float DistanceBelowViewportTop(RectTransform titleRt)
+    {
+        titleRt.GetWorldCorners(_corners);
+        // corners: 0=BL, 1=TL, 2=TR, 3=BR — use top-left
+        Vector3 titleTopLocal = _viewport.InverseTransformPoint(_corners[1]);
+        return _viewport.rect.yMax - titleTopLocal.y;
+    }
+
+    private void SetHiddenTitle(int index)
+    {
+        if (_hiddenTitleIndex == index)
+            return;
+
+        RestoreHiddenTitle();
+
+        if (index < 0 || index >= _entries.Count)
+            return;
+
+        var cg = _entries[index].CanvasGroup;
+        if (cg != null)
+        {
+            cg.alpha = 0f;
+            // Floater represents this title — don't steal clicks under the sticky bar.
+            cg.blocksRaycasts = false;
+            cg.interactable = false;
+        }
+
+        _hiddenTitleIndex = index;
+    }
+
+    private void RestoreHiddenTitle()
+    {
+        if (_hiddenTitleIndex < 0)
+            return;
+
+        if (_hiddenTitleIndex < _entries.Count)
+        {
+            var cg = _entries[_hiddenTitleIndex].CanvasGroup;
+            if (cg != null)
+            {
+                cg.alpha = 1f;
+                cg.blocksRaycasts = true;
+                cg.interactable = true;
+            }
+        }
+
+        _hiddenTitleIndex = -1;
+    }
+
+
+    private void SetStickyVisible(bool visible)
+    {
+        if (_visible == visible && _stickyRoot != null && _stickyRoot.gameObject.activeSelf == visible)
+            return;
+
+        _visible = visible;
+        if (_stickyRoot != null)
+            _stickyRoot.gameObject.SetActive(visible);
+
+        if (!visible)
+        {
+            _currentTitle = null;
+            _activeIndex = -1;
+        }
+    }
+}
+
+
+/// <summary>
+/// ScrollRect wheel handler: each notch snaps the next/previous content row to the
+/// sticky-aware top line (viewport top, or just under the pinned mod title).
 /// Also clears active editing when the user scrolls or begins drag-panning.
 /// </summary>
 public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHandler, IEndDragHandler
 {
-    private ScrollRect _scrollRect;
-    private float _stepPixels = 70f;
+    /// <summary>Ignore separators / hairlines when picking snap targets.</summary>
+    private const float MinSnapChildHeight = 8f;
 
-    public void Initialize(ScrollRect scrollRect, float stepPixels)
+    /// <summary>How far past the snap line a row must be to count as "next" / "previous".</summary>
+    private const float SnapPassThreshold = 3f;
+
+    private ScrollRect _scrollRect;
+    private StickyModTitleController _sticky;
+    private readonly Vector3[] _corners = new Vector3[4];
+
+    public void Initialize(ScrollRect scrollRect, StickyModTitleController sticky = null)
     {
         _scrollRect = scrollRect;
-        _stepPixels = Mathf.Max(1f, stepPixels);
+        _sticky = sticky;
     }
 
     public void OnScroll(PointerEventData eventData)
@@ -781,14 +2088,13 @@ public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHa
         if (Mathf.Approximately(scrollDelta, 0f))
             return;
 
-        // One notch (typically ±1 or ±120 depending on platform) → exactly one item step.
-        float direction = scrollDelta > 0f ? 1f : -1f;
-
-        // Positive wheel (up) should reveal content above → increase verticalNormalizedPosition.
         RectTransform content = _scrollRect.content;
         RectTransform viewport = _scrollRect.viewport != null
             ? _scrollRect.viewport
             : (RectTransform)_scrollRect.transform;
+
+        if (content == null || viewport == null)
+            return;
 
         float contentHeight = content.rect.height;
         float viewportHeight = viewport.rect.height;
@@ -796,12 +2102,20 @@ public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHa
         if (scrollable <= 0f)
             return;
 
-        float stepNormalized = _stepPixels / scrollable;
-        float next = Mathf.Clamp01(_scrollRect.verticalNormalizedPosition + direction * stepNormalized);
-        _scrollRect.velocity = Vector2.zero;
-        _scrollRect.verticalNormalizedPosition = next;
+        // Wheel up (positive) → reveal content above; wheel down → content below.
+        bool scrollUp = scrollDelta > 0f;
+        float inset = _sticky != null ? _sticky.SnapTopInset : 0f;
 
-        // Consume so ScrollRect's own OnScroll (sensitivity 0) is irrelevant.
+        if (!TryFindSnapChild(content, viewport, inset, scrollUp, out RectTransform target))
+        {
+            // Already at end — nudge fully to top/bottom.
+            _scrollRect.velocity = Vector2.zero;
+            _scrollRect.verticalNormalizedPosition = scrollUp ? 1f : 0f;
+            eventData.Use();
+            return;
+        }
+
+        SnapChildToInset(content, viewport, target, inset, scrollable);
         eventData.Use();
     }
 
@@ -812,9 +2126,83 @@ public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHa
 
     public void OnEndDrag(PointerEventData eventData)
     {
-        // no-op; kept for interface completeness / future inertia tweaks
+    }
+
+    private bool TryFindSnapChild(
+        RectTransform content,
+        RectTransform viewport,
+        float inset,
+        bool scrollUp,
+        out RectTransform target)
+    {
+        target = null;
+        float bestDist = scrollUp ? float.MinValue : float.MaxValue;
+
+        for (int i = 0; i < content.childCount; i++)
+        {
+            var child = content.GetChild(i) as RectTransform;
+            if (child == null || !child.gameObject.activeInHierarchy)
+                continue;
+
+            float h = child.rect.height;
+            if (h < MinSnapChildHeight)
+                continue;
+
+            // Skip the in-list title currently represented by the sticky floater.
+            var cg = child.GetComponent<CanvasGroup>();
+            if (cg != null && cg.alpha < 0.5f)
+                continue;
+
+            float topDist = DistanceBelowViewportTop(viewport, child);
+
+            if (scrollUp)
+            {
+                // Previous row: top is above the snap line.
+                if (topDist < inset - SnapPassThreshold && topDist > bestDist)
+                {
+                    bestDist = topDist;
+                    target = child;
+                }
+            }
+            else
+            {
+                // Next row: top is below the snap line.
+                if (topDist > inset + SnapPassThreshold && topDist < bestDist)
+                {
+                    bestDist = topDist;
+                    target = child;
+                }
+            }
+        }
+
+        return target != null;
+    }
+
+    private void SnapChildToInset(
+        RectTransform content,
+        RectTransform viewport,
+        RectTransform child,
+        float inset,
+        float scrollable)
+    {
+        float topDist = DistanceBelowViewportTop(viewport, child);
+        // Positive delta → child is too low → move content up → decrease normalized pos.
+        float deltaPixels = topDist - inset;
+        float next = Mathf.Clamp01(
+            _scrollRect.verticalNormalizedPosition - deltaPixels / scrollable);
+
+        _scrollRect.velocity = Vector2.zero;
+        _scrollRect.verticalNormalizedPosition = next;
+    }
+
+    private float DistanceBelowViewportTop(RectTransform viewport, RectTransform rt)
+    {
+        rt.GetWorldCorners(_corners);
+        Vector3 topLocal = viewport.InverseTransformPoint(_corners[1]);
+        return viewport.rect.yMax - topLocal.y;
     }
 }
+
 
 /// <summary>
 /// Bool control: only flips on a clean click (pointer moved less than threshold).
@@ -849,7 +2237,6 @@ public class ClickVsDragToggle : MonoBehaviour, IPointerDownHandler, IPointerUpH
             return;
         _pressed = false;
 
-        // Treat as drag/pan if the pointer moved past the threshold
         if ((eventData.position - _pressPos).sqrMagnitude > _threshold * _threshold)
             return;
 
@@ -859,18 +2246,18 @@ public class ClickVsDragToggle : MonoBehaviour, IPointerDownHandler, IPointerUpH
 }
 
 /// <summary>
-/// Text/number field: first clean click arms the InputField for editing.
+/// Text/number field: first clean click arms the TMP_InputField for editing.
 /// Does not implement IDragHandler so ScrollRect drag-pan still works from this control.
 /// </summary>
 public class SelectToEditInput : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
 {
-    private InputField _input;
+    private TMP_InputField _input;
     private float _threshold;
     private Action _onSelect;
     private Vector2 _pressPos;
     private bool _pressed;
 
-    public void Initialize(InputField input, float dragThresholdPx, Action onSelect)
+    public void Initialize(TMP_InputField input, float dragThresholdPx, Action onSelect)
     {
         _input = input;
         _threshold = dragThresholdPx;
@@ -894,11 +2281,9 @@ public class SelectToEditInput : MonoBehaviour, IPointerDownHandler, IPointerUpH
         if ((eventData.position - _pressPos).sqrMagnitude > _threshold * _threshold)
             return;
 
-        // Already editing this field — leave it alone
         if (_input != null && _input.interactable && _input.isFocused)
             return;
 
         _onSelect?.Invoke();
     }
 }
-
