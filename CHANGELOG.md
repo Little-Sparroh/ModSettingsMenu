@@ -1,6 +1,18 @@
 # Changelog
 
+## 2.0.2
+
+### Features
+* **Collapsible toolbar filters** — +/- button to the right of the search bar hides sort, filter chips, and options rows while keeping search visible, freeing vertical space for settings; preference persisted as `ToolbarFiltersCollapsed`
+
+## 2.0.1
+
+### Fixes
+* Config toggles/inputs now write the **plugin's live ConfigEntry** (via Chainloader) so `SettingChanged` fires and mods hot-reload immediately — previously MSM only wrote a detached string ConfigFile, so in-memory settings never updated until restart
+
+
 ## 2.0.0
+
 
 ### Features
 * **Sticky mod titles** — while scrolling the config list, the current mod's title pins to the top of the viewport until the next mod pushes it off (so you always know which mod you're editing)

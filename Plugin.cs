@@ -16,7 +16,9 @@ public class SparrohPlugin : BaseUnityPlugin
 {
     public const string PLUGINGUID = "sparroh.modsettingsmenu";
     public const string PLUGINNAME = "ModSettingsMenu";
-    public const string PLUGINVERSION = "2.0.0";
+    public const string PLUGINVERSION = "2.0.2";
+
+
     
     public new static ManualLogSource Logger;
 
@@ -40,6 +42,11 @@ public class SparrohPlugin : BaseUnityPlugin
     /// Empty = all expanded (default).
     /// </summary>
     public static ConfigEntry<string> CollapsedMods { get; private set; }
+
+    /// <summary>
+    /// When true, toolbar filter/sort/options rows are collapsed (search stays visible).
+    /// </summary>
+    public static ConfigEntry<bool> ToolbarFiltersCollapsed { get; private set; }
 
     public static bool IsRebinding { get; set; } = false;
     public static bool IsRebindingReposition { get; set; } = false;
@@ -77,7 +84,11 @@ public class SparrohPlugin : BaseUnityPlugin
             "CollapsedMods",
             "",
             "Comma-separated mod keys (GUID or name) whose settings are collapsed; empty means all expanded");
-
+        ToolbarFiltersCollapsed = Config.Bind(
+            "UI",
+            "ToolbarFiltersCollapsed",
+            false,
+            "When enabled, hide toolbar filter/sort/options rows (search bar stays visible)");
 
         var harmony = new Harmony(PLUGINGUID);
         harmony.PatchAll(typeof(SparrohPlugin));

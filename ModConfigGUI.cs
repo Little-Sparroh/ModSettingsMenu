@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using BepInEx;
+using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using Sparroh.UI;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+
 
 public class ModConfigGUI : MonoBehaviour
 {
@@ -31,15 +33,22 @@ public class ModConfigGUI : MonoBehaviour
 
     // Toolbar (fixed above scroll content)
     private static RectTransform _toolbarRoot;
+    private static RectTransform _toolbarFiltersBody;
+    private static RectTransform _toolbarScrollRt;
     private static UIInputField _searchField;
     private static UIDropdown _sortDropdown;
     private static UIToggle _hideEmptyToggle;
     private static UIToggle _groupByAuthorToggle;
     private static UIButton _expandCollapseAllBtn;
+    private static UIButton _toolbarFiltersToggleBtn;
     private static readonly List<UIButton> _filterChipButtons = new List<UIButton>();
     private static string _searchQuery = "";
     private static bool _suppressToolbarCallbacks;
+    private static bool _toolbarFiltersCollapsed;
+    private static float _toolbarHExpanded;
+    private static float _toolbarHCollapsed;
     private static string[] _cfgFilesCache;
+
 
     // Collapse state (keys = GUID or Name). Empty set = all expanded (default).
     private static readonly HashSet<string> _collapsedMods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -337,8 +346,8 @@ public class ModConfigGUI : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds a non-scrolling toolbar (search, sort, hide-empty, filter chips) pinned to the
-    /// top of the window body, and insets the scroll view below it.
+    /// Builds a non-scrolling toolbar (search always visible; sort/filters collapsible)
+    /// pinned to the top of the window body, and insets the scroll view below it.
     /// </summary>
     private static void CreateToolbar(UIScrollView scrollView)
     {
@@ -350,18 +359,22 @@ public class ModConfigGUI : MonoBehaviour
         float searchH = UITheme.S(34f);
         float rowH = UITheme.S(30f);
         float gap = UITheme.S(5f);
-        // 4 rows: search | sort+hide | chips | group+expand
-        float toolbarH = pad + searchH + gap + rowH + gap + rowH + gap + rowH + pad;
+        // Expanded: search | sort+hide | chips | group+expand
+        // Collapsed: search only
+        _toolbarHExpanded = pad + searchH + gap + rowH + gap + rowH + gap + rowH + pad;
+        _toolbarHCollapsed = pad + searchH + pad;
 
+        _toolbarScrollRt = scrollView.Rect;
+        _toolbarFiltersCollapsed = SparrohPlugin.ToolbarFiltersCollapsed?.Value ?? false;
+        float initialH = _toolbarFiltersCollapsed ? _toolbarHCollapsed : _toolbarHExpanded;
 
         // Inset scroll view under the toolbar.
-        var scrollRt = scrollView.Rect;
-        scrollRt.offsetMax = new Vector2(scrollRt.offsetMax.x, -toolbarH);
+        _toolbarScrollRt.offsetMax = new Vector2(_toolbarScrollRt.offsetMax.x, -initialH);
 
         var toolbarBg = UIFactory.CreateImage("Toolbar", body, UIColors.Surface, raycast: true);
         UIFactory.ApplyWhiteSprite(toolbarBg);
         _toolbarRoot = toolbarBg.rectTransform;
-        UIHelpers.SetTopStretch(_toolbarRoot, toolbarH, left: 0f, right: 0f, top: 0f);
+        UIHelpers.SetTopStretch(_toolbarRoot, initialH, left: 0f, right: 0f, top: 0f);
         _toolbarRoot.SetAsLastSibling();
 
         // Accent under toolbar (separates from list) — ignore layout so it doesn't steal a row.
@@ -386,9 +399,21 @@ public class ModConfigGUI : MonoBehaviour
             controlChildWidth: true,
             expandWidth: true);
 
-        // ── Row 1: search ────────────────────────────────────────────────
+        // ── Row 1: search + filters collapse toggle ──────────────────────
+        var searchRow = UIFactory.CreateRect("SearchRow", _toolbarRoot);
+        UIHelpers.EnsureLayoutElement(searchRow.gameObject, preferredHeight: searchH, minHeight: searchH);
+        UIFactory.AddHorizontalLayout(
+            searchRow.gameObject,
+            UITheme.S(6f),
+            new RectOffset(0, 0, 0, 0),
+            TextAnchor.MiddleLeft,
+            controlChildWidth: true,
+            expandWidth: false,
+            controlChildHeight: true,
+            expandHeight: true);
+
         _searchField = UIInputField.Create(
-            _toolbarRoot,
+            searchRow,
             "",
             "Search mods…",
             onChanged: query =>
@@ -399,9 +424,10 @@ public class ModConfigGUI : MonoBehaviour
                 RefreshMods(resetScroll: true, preserveSearchFocus: true);
             },
             name: "SearchField");
-        UIHelpers.EnsureLayoutElement(_searchField.GameObject,
+        var searchLe = UIHelpers.EnsureLayoutElement(_searchField.GameObject,
             preferredHeight: searchH,
             minHeight: searchH);
+        searchLe.flexibleWidth = 1f;
         if (_searchField.TextComponent != null)
         {
             _searchField.TextComponent.fontSize = UITheme.S(FontBodyRef);
@@ -413,8 +439,47 @@ public class ModConfigGUI : MonoBehaviour
             _searchField.Placeholder.alignment = TextAlignmentOptions.Left;
         }
 
+        _toolbarFiltersToggleBtn = UIButton.Create(
+            searchRow,
+            _toolbarFiltersCollapsed ? "+" : "-",
+            onClick: () =>
+            {
+                if (_suppressToolbarCallbacks)
+                    return;
+                SetToolbarFiltersCollapsed(!_toolbarFiltersCollapsed, persist: true);
+            },
+            style: UIButtonStyle.Default,
+            name: "ToolbarFiltersToggle",
+            preferredHeight: searchH);
+        var toggleLe = UIHelpers.EnsureLayoutElement(_toolbarFiltersToggleBtn.GameObject,
+            preferredWidth: searchH,
+            preferredHeight: searchH,
+            minHeight: searchH);
+        toggleLe.flexibleWidth = 0f;
+        if (_toolbarFiltersToggleBtn.Label != null)
+        {
+            _toolbarFiltersToggleBtn.Label.fontSize = UITheme.S(FontModTitleRef);
+            _toolbarFiltersToggleBtn.Label.fontStyle = FontStyles.Bold;
+        }
+
+        // ── Collapsible body: sort / chips / group ───────────────────────
+        _toolbarFiltersBody = UIFactory.CreateRect("FiltersBody", _toolbarRoot);
+        float filtersBodyH = rowH + gap + rowH + gap + rowH;
+        UIHelpers.EnsureLayoutElement(_toolbarFiltersBody.gameObject,
+            preferredHeight: filtersBodyH,
+            minHeight: filtersBodyH);
+        UIFactory.AddVerticalLayout(
+            _toolbarFiltersBody.gameObject,
+            gap,
+            new RectOffset(0, 0, 0, 0),
+            TextAnchor.UpperLeft,
+            controlChildHeight: true,
+            expandHeight: false,
+            controlChildWidth: true,
+            expandWidth: true);
+
         // ── Row 2: sort + hide empty ─────────────────────────────────────
-        var row2 = UIFactory.CreateRect("SortRow", _toolbarRoot);
+        var row2 = UIFactory.CreateRect("SortRow", _toolbarFiltersBody);
         UIHelpers.EnsureLayoutElement(row2.gameObject, preferredHeight: rowH, minHeight: rowH);
         UIFactory.AddHorizontalLayout(
             row2.gameObject,
@@ -464,7 +529,6 @@ public class ModConfigGUI : MonoBehaviour
             });
         }
 
-
         _sortDropdown.OnChanged((idx, _) =>
         {
             if (_suppressToolbarCallbacks)
@@ -504,7 +568,7 @@ public class ModConfigGUI : MonoBehaviour
             _hideEmptyToggle.Label.fontSize = UITheme.S(FontSmallRef);
 
         // ── Row 3: filter chips ──────────────────────────────────────────
-        var row3 = UIFactory.CreateRect("ChipRow", _toolbarRoot);
+        var row3 = UIFactory.CreateRect("ChipRow", _toolbarFiltersBody);
         UIHelpers.EnsureLayoutElement(row3.gameObject, preferredHeight: rowH, minHeight: rowH);
         UIFactory.AddHorizontalLayout(
             row3.gameObject,
@@ -552,7 +616,7 @@ public class ModConfigGUI : MonoBehaviour
         }
 
         // ── Row 4: group by author + expand/collapse all ─────────────────
-        var row4 = UIFactory.CreateRect("DensityRow", _toolbarRoot);
+        var row4 = UIFactory.CreateRect("DensityRow", _toolbarFiltersBody);
         UIHelpers.EnsureLayoutElement(row4.gameObject, preferredHeight: rowH, minHeight: rowH);
         UIFactory.AddHorizontalLayout(
             row4.gameObject,
@@ -609,9 +673,47 @@ public class ModConfigGUI : MonoBehaviour
             _expandCollapseAllBtn.Label.fontSize = UITheme.S(FontSmallRef);
             _expandCollapseAllBtn.Label.fontStyle = FontStyles.Bold;
         }
+
+        // Apply initial collapsed/expanded chrome (heights already set above).
+        ApplyToolbarFiltersCollapsed(persist: false);
     }
 
+    /// <summary>Show or hide toolbar filter/sort rows; search stays visible.</summary>
+    private static void SetToolbarFiltersCollapsed(bool collapsed, bool persist)
+    {
+        _toolbarFiltersCollapsed = collapsed;
+        ApplyToolbarFiltersCollapsed(persist);
+    }
 
+    private static void ApplyToolbarFiltersCollapsed(bool persist)
+    {
+        if (_toolbarFiltersBody != null)
+            _toolbarFiltersBody.gameObject.SetActive(!_toolbarFiltersCollapsed);
+
+        float h = _toolbarFiltersCollapsed ? _toolbarHCollapsed : _toolbarHExpanded;
+        if (_toolbarRoot != null)
+            UIHelpers.SetTopStretch(_toolbarRoot, h, left: 0f, right: 0f, top: 0f);
+
+        if (_toolbarScrollRt != null)
+            _toolbarScrollRt.offsetMax = new Vector2(_toolbarScrollRt.offsetMax.x, -h);
+
+        if (_toolbarFiltersToggleBtn != null)
+            _toolbarFiltersToggleBtn.SetText(_toolbarFiltersCollapsed ? "+" : "-");
+
+        // Closing filters should also close any open sort dropdown.
+        if (_toolbarFiltersCollapsed && _sortDropdown != null)
+        {
+            _sortDropdown.CloseList();
+            UnregisterDropdown(_sortDropdown);
+        }
+
+        if (persist && SparrohPlugin.ToolbarFiltersCollapsed != null &&
+            SparrohPlugin.ToolbarFiltersCollapsed.Value != _toolbarFiltersCollapsed)
+        {
+            SparrohPlugin.ToolbarFiltersCollapsed.Value = _toolbarFiltersCollapsed;
+            SparrohPlugin.ToolbarFiltersCollapsed.ConfigFile.Save();
+        }
+    }
 
     private static void SyncToolbarFromConfig()
     {
@@ -632,12 +734,19 @@ public class ModConfigGUI : MonoBehaviour
 
             RefreshFilterChipStyles(NormalizeFilter(SparrohPlugin.ModListFilter?.Value));
             UpdateExpandCollapseAllLabel();
+
+            bool collapsed = SparrohPlugin.ToolbarFiltersCollapsed?.Value ?? false;
+            if (collapsed != _toolbarFiltersCollapsed)
+                SetToolbarFiltersCollapsed(collapsed, persist: false);
+            else
+                ApplyToolbarFiltersCollapsed(persist: false);
         }
         finally
         {
             _suppressToolbarCallbacks = false;
         }
     }
+
 
 
     private static void ApplyFilterChip(string filterId)
@@ -1280,8 +1389,137 @@ public class ModConfigGUI : MonoBehaviour
 
     private static bool ModHasConfig(ModInfo mod) => TryFindConfigPath(mod, out _);
 
+    /// <summary>
+    /// Write a setting to the plugin's live ConfigEntry (fires SettingChanged) and save.
+    /// Falls back to a detached ConfigFile write if the live entry cannot be resolved.
+    /// </summary>
+    private static void ApplySettingValue(
+        ModInfo mod,
+        string configPath,
+        string section,
+        string key,
+        string value,
+        ConfigEntry<string> fileFallback)
+    {
+        if (TrySetLiveConfigValue(mod, configPath, section, key, value))
+            return;
+
+        // Detached file-only write (no in-memory plugin update).
+        if (fileFallback != null)
+        {
+            fileFallback.Value = value ?? "";
+            fileFallback.ConfigFile.Save();
+        }
+    }
+
+    private static bool TrySetLiveConfigValue(
+        ModInfo mod,
+        string configPath,
+        string section,
+        string key,
+        string value)
+    {
+        try
+        {
+            BaseUnityPlugin plugin = FindPluginForConfig(mod, configPath);
+            if (plugin?.Config == null)
+                return false;
+
+            ConfigEntryBase live = FindLiveEntry(plugin.Config, section, key);
+            if (live == null)
+                return false;
+
+            // Prefer serialized set so bool/int/float/string all round-trip correctly.
+            live.SetSerializedValue(value ?? "");
+            plugin.Config.Save();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SparrohPlugin.Logger.LogWarning(
+                $"Live config set failed for [{section}] {key}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static BaseUnityPlugin FindPluginForConfig(ModInfo mod, string configPath)
+    {
+        if (!string.IsNullOrEmpty(mod.GUID) &&
+            Chainloader.PluginInfos != null &&
+            Chainloader.PluginInfos.TryGetValue(mod.GUID, out var byGuid) &&
+            byGuid?.Instance is BaseUnityPlugin fromGuid)
+        {
+            return fromGuid;
+        }
+
+        if (Chainloader.PluginInfos == null || string.IsNullOrEmpty(configPath))
+            return null;
+
+        foreach (var kv in Chainloader.PluginInfos)
+        {
+            if (kv.Value?.Instance is not BaseUnityPlugin plugin || plugin.Config == null)
+                continue;
+
+            string path = plugin.Config.ConfigFilePath;
+            if (!string.IsNullOrEmpty(path) &&
+                string.Equals(path, configPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return plugin;
+            }
+        }
+
+        return null;
+    }
+
+    private static ConfigEntryBase FindLiveEntry(ConfigFile config, string section, string key)
+    {
+        if (config == null || string.IsNullOrEmpty(section) || string.IsNullOrEmpty(key))
+            return null;
+
+        foreach (var kv in config)
+        {
+            if (kv.Key == null || kv.Value == null)
+                continue;
+            if (!string.Equals(kv.Key.Section, section, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!string.Equals(kv.Key.Key, key, StringComparison.OrdinalIgnoreCase))
+                continue;
+            return kv.Value;
+        }
+
+        return null;
+    }
+
+    private static string GetLiveOrFileValue(
+        ModInfo mod,
+        string configPath,
+        string section,
+        string key,
+        string fileValue)
+    {
+        try
+        {
+            BaseUnityPlugin plugin = FindPluginForConfig(mod, configPath);
+            ConfigEntryBase live = plugin != null
+                ? FindLiveEntry(plugin.Config, section, key)
+                : null;
+            if (live != null)
+            {
+                string serialized = live.GetSerializedValue();
+                if (serialized != null)
+                    return serialized;
+            }
+        }
+        catch
+        {
+            // fall through to file value
+        }
+
+        return fileValue ?? "";
+    }
 
     private static Dictionary<string, List<(string entry, string[] options)>> ParseModConfig(string configPath)
+
     {
         try
         {
@@ -1502,17 +1740,20 @@ public class ModConfigGUI : MonoBehaviour
                 {
                     string key = fullEntry.Substring(0, fullEntry.IndexOf('=')).Trim();
                     string value = fullEntry.Substring(fullEntry.IndexOf('=') + 1).Trim();
-                    var configEntry = configFile.Bind(section.Key.Trim('[', ']'), key, value);
+                    string sectionName = section.Key.Trim('[', ']');
+                    // Detached bind kept only as disk fallback if live plugin entry is missing.
+                    var configEntry = configFile.Bind(sectionName, key, value);
 
                     string[] options = null;
-                    string cacheKey = section.Key.Trim('[', ']') + "." + key;
+                    string cacheKey = sectionName + "." + key;
                     if (_cachedOptions.ContainsKey(configPath) &&
                         _cachedOptions[configPath].ContainsKey(cacheKey))
                     {
                         options = _cachedOptions[configPath][cacheKey];
                     }
 
-                    string rawEntryValue = configEntry.Value ?? "";
+                    // Prefer the plugin's in-memory value so the UI matches live state.
+                    string rawEntryValue = GetLiveOrFileValue(modLocal, configPath, sectionName, key, value);
                     Type entryType = typeof(string);
 
                     if (bool.TryParse(rawEntryValue, out _))
@@ -1521,6 +1762,7 @@ public class ModConfigGUI : MonoBehaviour
                         entryType = typeof(int);
                     else if (float.TryParse(rawEntryValue, out _))
                         entryType = typeof(float);
+
 
                     // Entry row: dark surface with label + control
                     float rowH = UITheme.S(58f);
@@ -1591,14 +1833,21 @@ public class ModConfigGUI : MonoBehaviour
                         toggleImg.color = isOn ? UIColors.ToggleOn : UIColors.ToggleOff;
                         toggleImg.raycastTarget = true;
 
+                        string boolSection = sectionName;
+                        string boolKey = key;
                         var entryToggle = valueRt.gameObject.AddComponent<ClickVsDragToggle>();
                         entryToggle.Initialize(
                             isOn,
                             ClickDragThresholdPx,
                             val =>
                             {
-                                configEntry.Value = val ? "True" : "False";
-                                configEntry.ConfigFile.Save();
+                                ApplySettingValue(
+                                    modLocal,
+                                    configPath,
+                                    boolSection,
+                                    boolKey,
+                                    val ? "true" : "false",
+                                    configEntry);
                                 statusTmp.text = val ? "ON" : "OFF";
                                 statusTmp.color = val ? UIColors.Success : UIColors.Error;
                                 toggleImg.color = val ? UIColors.ToggleOn : UIColors.ToggleOff;
@@ -1608,7 +1857,7 @@ public class ModConfigGUI : MonoBehaviour
                     else if (options != null && options.Length > 0)
                     {
                         int initial = Array.FindIndex(options,
-                            o => string.Equals(o, value, StringComparison.OrdinalIgnoreCase));
+                            o => string.Equals(o, rawEntryValue, StringComparison.OrdinalIgnoreCase));
                         if (initial < 0)
                             initial = 0;
 
@@ -1621,12 +1870,20 @@ public class ModConfigGUI : MonoBehaviour
                             onChanged: null,
                             "Dropdown_" + key);
 
+                        string ddSection = sectionName;
+                        string ddKey = key;
                         dropdown.OnChanged((idx, selected) =>
                         {
-                            configEntry.Value = selected;
-                            configEntry.ConfigFile.Save();
+                            ApplySettingValue(
+                                modLocal,
+                                configPath,
+                                ddSection,
+                                ddKey,
+                                selected,
+                                configEntry);
                             UnregisterDropdown(dropdown);
                         });
+
 
                         UIHelpers.SetFillParent(dropdown.Rect);
 
@@ -1657,15 +1914,15 @@ public class ModConfigGUI : MonoBehaviour
                     }
                     else
                     {
-                        string sectionName = section.Key.Trim('[', ']');
                         bool isConfigToggleKey = sectionName == "Keybinds" && key == "ToggleModConfigGUI";
                         bool isRepositionKey = sectionName == "Keybinds" && key == "ToggleHudReposition";
 
                         var field = UIInputField.Create(
                             valueRt,
-                            value,
+                            rawEntryValue,
                             "",
                             name: "Input_" + key);
+
                         UIHelpers.SetFillParent(field.Rect);
 
                         // Darker input already from theme; enlarge + bold text.
@@ -1717,10 +1974,17 @@ public class ModConfigGUI : MonoBehaviour
                             var armClick = field.GameObject.AddComponent<SelectToEditInput>();
                             armClick.Initialize(field.Input, ClickDragThresholdPx, () => ActivateInput(field.Input));
 
+                            string inputSection = sectionName;
+                            string inputKey = key;
                             field.Input.onEndEdit.AddListener(newVal =>
                             {
-                                configEntry.Value = newVal;
-                                configEntry.ConfigFile.Save();
+                                ApplySettingValue(
+                                    modLocal,
+                                    configPath,
+                                    inputSection,
+                                    inputKey,
+                                    newVal,
+                                    configEntry);
                                 field.Input.interactable = false;
                                 if (_activeInput == field.Input)
                                     _activeInput = null;
@@ -1729,6 +1993,7 @@ public class ModConfigGUI : MonoBehaviour
                             });
                         }
                     }
+
                 }
             }
         }

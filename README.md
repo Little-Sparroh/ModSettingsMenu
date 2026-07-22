@@ -19,7 +19,9 @@ Adapted from ToeKneeRED's MycoModList.
 * Visual indicators for sandbox mods
 * Multi-mod support displaying all installed mods with configs
 * **Mod list toolbar** — search by name/GUID, sort (A–Z, load order, sandbox first, …), hide mods without config, and All/Sandbox/Client-side filter chips
+* **Collapsible toolbar filters** — +/- beside the search bar hides sort/filter/options rows (search stays visible) for more list space; state persisted
 * **Collapse / expand** — click mod titles (or the sticky pinned header) to fold settings; Expand/Collapse all; optional group-by-author (GUID prefix)
+
 
 
 * **HUD Reposition Mode** (default F9) — click and drag registered HUD elements; positions write back to each mod's AnchorX/AnchorY config
@@ -66,6 +68,8 @@ The mod itself has configurable settings:
 * **ModListFilter**: `All` (default), `Sandbox`, or `ClientSide`
 * **GroupModsByAuthor**: Group list by GUID author prefix (default: false)
 * **CollapsedMods**: Comma-separated mod keys that are collapsed (empty = all expanded)
+* **ToolbarFiltersCollapsed**: Hide toolbar filter/sort/options rows (search stays visible; default false)
+
 
 Keybinds can be rebound in-game by clicking the input field in the Mod Config GUI. Sort, hide-empty, filter chips, grouping, and collapse state also update from the toolbar.
 
