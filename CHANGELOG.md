@@ -1,6 +1,12 @@
 # Changelog
 
+## 2.0.3
+
+### Fixes
+* **Dropdown menus unusable** — option lists no longer draw behind later rows or get clipped by the scroll mask (requires SparrohUILib 1.1.5+; lists reparent to the window canvas while open)
+
 ## 2.0.2
+
 
 ### Features
 * **Collapsible toolbar filters** — +/- button to the right of the search bar hides sort, filter chips, and options rows while keeping search visible, freeing vertical space for settings; preference persisted as `ToolbarFiltersCollapsed`

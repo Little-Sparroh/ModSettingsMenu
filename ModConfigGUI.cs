@@ -510,24 +510,25 @@ public class ModConfigGUI : MonoBehaviour
         }
 
         // Explicit open/close so we track the dropdown like config fields.
+        // UIDropdown.OpenList reparents + elevates the list above siblings / scroll masks.
         var sortMainBtn = _sortDropdown.GameObject.GetComponentInChildren<Button>();
         if (sortMainBtn != null)
         {
             sortMainBtn.onClick.RemoveAllListeners();
             sortMainBtn.onClick.AddListener(() =>
             {
-                var list = _sortDropdown.GameObject.transform.Find("List");
-                bool wasOpen = list != null && list.gameObject.activeSelf;
+                // Use IsOpen — List is reparented to the root canvas while open, so Find("List") fails.
+                bool wasOpen = _sortDropdown.IsOpen;
                 ClearActiveEditing();
                 if (!wasOpen)
                 {
                     _sortDropdown.OpenList();
-                    // List is a child of the sort row; chip row is drawn later and would cover it.
-                    EnsureDropdownListOverlay(list);
                     RegisterOpenDropdown(_sortDropdown);
                 }
             });
         }
+
+
 
         _sortDropdown.OnChanged((idx, _) =>
         {
@@ -797,35 +798,8 @@ public class ModConfigGUI : MonoBehaviour
         return "All";
     }
 
-    /// <summary>
-    /// Raise a dropdown option list above later toolbar siblings (e.g. filter chips)
-    /// via a nested Canvas with override sorting. Safe to call repeatedly.
-    /// </summary>
-    private static void EnsureDropdownListOverlay(Transform list)
-    {
-        if (list == null)
-            return;
-
-        var go = list.gameObject;
-        var canvas = go.GetComponent<Canvas>();
-        if (canvas == null)
-            canvas = go.AddComponent<Canvas>();
-
-        canvas.overrideSorting = true;
-        // Window uses WindowSortingOrder + 10; sit clearly above toolbar chrome.
-        canvas.sortingOrder = UITheme.WindowSortingOrder + 50;
-
-        if (go.GetComponent<GraphicRaycaster>() == null)
-            go.AddComponent<GraphicRaycaster>();
-
-        // Keep list from participating in parent layout while open (overflow popup).
-        var le = go.GetComponent<LayoutElement>();
-        if (le == null)
-            le = go.AddComponent<LayoutElement>();
-        le.ignoreLayout = true;
-    }
-
     // ── Collapse / group helpers ─────────────────────────────────────────
+
 
     private static string GetModKey(ModInfo mod)
     {
@@ -1893,8 +1867,8 @@ public class ModConfigGUI : MonoBehaviour
                             mainBtn.onClick.RemoveAllListeners();
                             mainBtn.onClick.AddListener(() =>
                             {
-                                var list = dropdown.GameObject.transform.Find("List");
-                                bool wasOpen = list != null && list.gameObject.activeSelf;
+                                // Use IsOpen — List is reparented to the root canvas while open.
+                                bool wasOpen = dropdown.IsOpen;
 
                                 ClearActiveEditing();
 
@@ -1905,6 +1879,7 @@ public class ModConfigGUI : MonoBehaviour
                                 }
                             });
                         }
+
 
                         if (dropdown.Label != null)
                         {
