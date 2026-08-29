@@ -4,7 +4,8 @@
         <TargetFramework>netstandard2.1</TargetFramework>
         <AssemblyName>ModSettingsMenu</AssemblyName>
         <Product>ModSettingsMenu</Product>
-        <Version>2.1.0</Version>
+        <Version>2.1.1</Version>
+
 
         <Authors>Sparroh</Authors>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -41,34 +42,34 @@
 
     <ItemGroup>
         <Reference Include="0Harmony">
-            <HintPath>..\..\..\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\core\0Harmony.dll</HintPath>
+            <HintPath>..\..\..\..\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\core\0Harmony.dll</HintPath>
         </Reference>
         <Reference Include="Assembly-CSharp">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Assembly-CSharp.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Assembly-CSharp.dll</HintPath>
         </Reference>
         <Reference Include="Unity.InputSystem">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.InputSystem.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.InputSystem.dll</HintPath>
         </Reference>
         <Reference Include="Unity.Netcode.Runtime">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.Netcode.Runtime.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.Netcode.Runtime.dll</HintPath>
         </Reference>
         <Reference Include="Unity.TextMeshPro">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\Unity.TextMeshPro.dll</HintPath>
         </Reference>
         <Reference Include="UnityEngine.CoreModule">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
         </Reference>
         <Reference Include="UnityEngine.InputModule">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.InputModule.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.InputModule.dll</HintPath>
         </Reference>
         <Reference Include="UnityEngine.UI">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.UI.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.UI.dll</HintPath>
         </Reference>
         <Reference Include="UnityEngine.UIModule">
-            <HintPath>..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+            <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Mycopunk\Mycopunk_Data\Managed\UnityEngine.UIModule.dll</HintPath>
         </Reference>
         <Reference Include="SparrohUILib">
-            <HintPath>..\..\..\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\plugins\Sparroh-SparrohUILib\SparrohUILib.dll</HintPath>
+            <HintPath>..\..\..\..\AppData\Roaming\r2modmanPlus-local\Mycopunk\profiles\Default\BepInEx\plugins\Sparroh-SparrohUILib\SparrohUILib.dll</HintPath>
             <Private>false</Private>
         </Reference>
     </ItemGroup>

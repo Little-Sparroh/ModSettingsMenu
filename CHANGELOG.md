@@ -1,6 +1,14 @@
 # Changelog
 
+## 2.1.1
+
+### Fixes
+
+* **Wheel scroll skips entries** — large mod config blocks no longer jump past every setting to the next mod; snap
+  targets now walk nested layout rows (titles, section headers, entries) instead of only top-level content children
+
 ## 2.1.0
+
 
 ### Features
 

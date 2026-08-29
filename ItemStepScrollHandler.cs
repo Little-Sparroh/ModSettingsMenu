@@ -75,12 +75,31 @@ public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHa
     {
         target = null;
         var bestDist = scrollUp ? float.MinValue : float.MaxValue;
+        ConsiderChildren(content, viewport, inset, scrollUp, ref bestDist, ref target);
+        return target != null;
+    }
 
-        for (var i = 0; i < content.childCount; i++)
+    private void ConsiderChildren(
+        RectTransform parent,
+        RectTransform viewport,
+        float inset,
+        bool scrollUp,
+        ref float bestDist,
+        ref RectTransform target)
+    {
+        for (var i = 0; i < parent.childCount; i++)
         {
-            var child = content.GetChild(i) as RectTransform;
+            var child = parent.GetChild(i) as RectTransform;
             if (child == null || !child.gameObject.activeInHierarchy)
                 continue;
+
+            // Nested vertical layout groups (mod blocks / bodies) are containers,
+            // not rows — recurse so each entry/title/section snaps individually.
+            if (IsVerticalLayoutContainer(child))
+            {
+                ConsiderChildren(child, viewport, inset, scrollUp, ref bestDist, ref target);
+                continue;
+            }
 
             var h = child.rect.height;
             if (h < MinSnapChildHeight)
@@ -109,8 +128,15 @@ public class ItemStepScrollHandler : MonoBehaviour, IScrollHandler, IBeginDragHa
                 }
             }
         }
+    }
 
-        return target != null;
+    private static bool IsVerticalLayoutContainer(RectTransform rt)
+    {
+        if (rt.childCount == 0)
+            return false;
+
+        var vlg = rt.GetComponent<VerticalLayoutGroup>();
+        return vlg != null && vlg.enabled;
     }
 
     private void SnapChildToInset(

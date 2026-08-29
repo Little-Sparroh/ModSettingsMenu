@@ -45,11 +45,10 @@ public static class InputBlocker
                     {
                         var prefix = new HarmonyMethod(typeof(InputBlocker), nameof(BlockIfUiOpen));
                         harmony.Patch(method, prefix);
-                        SparrohPlugin.Logger.LogInfo($"[InputBlocker] Patched {gunType.Name}.{method.Name}");
                     }
                     catch (Exception ex)
                     {
-                        SparrohPlugin.Logger.LogDebug($"[InputBlocker] Skip {method.Name}: {ex.Message}");
+                        SparrohPlugin.Logger.LogWarning($"[InputBlocker] Failed to patch {gunType.Name}.{method.Name}: {ex.Message}");
                     }
                 }
 
@@ -70,10 +69,10 @@ public static class InputBlocker
                     {
                         var prefix = new HarmonyMethod(typeof(InputBlocker), nameof(BlockIfUiOpen));
                         harmony.Patch(method, prefix);
-                        SparrohPlugin.Logger.LogInfo($"[InputBlocker] Patched {playerType.Name}.{method.Name}");
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        SparrohPlugin.Logger.LogWarning($"[InputBlocker] Failed to patch {playerType.Name}.{method.Name}: {ex.Message}");
                     }
                 }
 
